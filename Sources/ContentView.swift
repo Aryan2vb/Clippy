@@ -21,6 +21,7 @@ class AppState: ObservableObject {
     let executor = ExecutionEngine()
     let undoEngine = UndoEngine()
     let scanBridge = ScanBridge()
+    let historyManager = HistoryManager()
     
     init() {
         // Load default rules
@@ -28,24 +29,259 @@ class AppState: ObservableObject {
     }
     
     private func loadDefaultRules() {
+        let home = NSHomeDirectory()
+        
         rules = [
+            // MARK: - Documents
             Rule(
                 name: "Archive PDFs",
                 description: "Move PDF files to the Archive folder",
                 conditions: [.fileExtension(is: "pdf")],
-                outcome: .move(to: URL(fileURLWithPath: NSHomeDirectory() + "/Documents/Archive/PDFs"))
+                outcome: .move(to: URL(fileURLWithPath: home + "/Documents/Archive/PDFs"))
             ),
+            Rule(
+                name: "Organize CSV Files",
+                description: "Move CSV data files to Data folder",
+                conditions: [.fileExtension(is: "csv")],
+                outcome: .move(to: URL(fileURLWithPath: home + "/Documents/Data/CSV"))
+            ),
+            Rule(
+                name: "Organize Excel Files",
+                description: "Move Excel spreadsheets to Spreadsheets folder",
+                conditions: [.fileExtension(is: "xlsx")],
+                outcome: .move(to: URL(fileURLWithPath: home + "/Documents/Spreadsheets"))
+            ),
+            Rule(
+                name: "Organize Word Documents",
+                description: "Move Word documents to Documents folder",
+                conditions: [.fileExtension(is: "docx")],
+                outcome: .move(to: URL(fileURLWithPath: home + "/Documents/Word"))
+            ),
+            
+            // MARK: - Images
             Rule(
                 name: "Organize Screenshots",
                 description: "Move screenshots to Screenshots folder",
                 conditions: [.fileName(contains: "Screenshot")],
-                outcome: .move(to: URL(fileURLWithPath: NSHomeDirectory() + "/Pictures/Screenshots"))
+                outcome: .move(to: URL(fileURLWithPath: home + "/Pictures/Screenshots"))
             ),
+            Rule(
+                name: "Organize JPG Photos",
+                description: "Move JPG images to Photos folder",
+                conditions: [.fileExtension(is: "jpg")],
+                outcome: .move(to: URL(fileURLWithPath: home + "/Pictures/Photos/JPG"))
+            ),
+            Rule(
+                name: "Organize JPEG Photos",
+                description: "Move JPEG images to Photos folder",
+                conditions: [.fileExtension(is: "jpeg")],
+                outcome: .move(to: URL(fileURLWithPath: home + "/Pictures/Photos/JPG"))
+            ),
+            Rule(
+                name: "Organize PNG Images",
+                description: "Move PNG images to Pictures folder",
+                conditions: [.fileExtension(is: "png")],
+                outcome: .move(to: URL(fileURLWithPath: home + "/Pictures/PNG"))
+            ),
+            Rule(
+                name: "Organize HEIC Photos",
+                description: "Move HEIC photos to Photos folder",
+                conditions: [.fileExtension(is: "heic")],
+                outcome: .move(to: URL(fileURLWithPath: home + "/Pictures/Photos/HEIC"))
+            ),
+            Rule(
+                name: "Organize GIF Images",
+                description: "Move GIF files to GIFs folder",
+                conditions: [.fileExtension(is: "gif")],
+                outcome: .move(to: URL(fileURLWithPath: home + "/Pictures/GIFs"))
+            ),
+            
+            // MARK: - RAW Photos
+            Rule(
+                name: "Organize Sony RAW (ARW)",
+                description: "Move Sony ARW raw files to RAW folder",
+                conditions: [.fileExtension(is: "arw")],
+                outcome: .move(to: URL(fileURLWithPath: home + "/Pictures/RAW/Sony"))
+            ),
+            Rule(
+                name: "Organize Canon RAW (CR2)",
+                description: "Move Canon CR2 raw files to RAW folder",
+                conditions: [.fileExtension(is: "cr2")],
+                outcome: .move(to: URL(fileURLWithPath: home + "/Pictures/RAW/Canon"))
+            ),
+            Rule(
+                name: "Organize Nikon RAW (NEF)",
+                description: "Move Nikon NEF raw files to RAW folder",
+                conditions: [.fileExtension(is: "nef")],
+                outcome: .move(to: URL(fileURLWithPath: home + "/Pictures/RAW/Nikon"))
+            ),
+            Rule(
+                name: "Organize DNG Files",
+                description: "Move DNG raw files to RAW folder",
+                conditions: [.fileExtension(is: "dng")],
+                outcome: .move(to: URL(fileURLWithPath: home + "/Pictures/RAW/DNG"))
+            ),
+            
+            // MARK: - Code & Development
+            Rule(
+                name: "Organize Jupyter Notebooks",
+                description: "Move Jupyter notebooks to Notebooks folder",
+                conditions: [.fileExtension(is: "ipynb")],
+                outcome: .move(to: URL(fileURLWithPath: home + "/Documents/Code/Notebooks"))
+            ),
+            Rule(
+                name: "Organize Python Files",
+                description: "Move Python scripts to Code folder",
+                conditions: [.fileExtension(is: "py")],
+                outcome: .move(to: URL(fileURLWithPath: home + "/Documents/Code/Python")),
+                isEnabled: false
+            ),
+            Rule(
+                name: "Organize JavaScript Files",
+                description: "Move JavaScript files to Code folder",
+                conditions: [.fileExtension(is: "js")],
+                outcome: .move(to: URL(fileURLWithPath: home + "/Documents/Code/JavaScript")),
+                isEnabled: false
+            ),
+            Rule(
+                name: "Organize Swift Files",
+                description: "Move Swift files to Code folder",
+                conditions: [.fileExtension(is: "swift")],
+                outcome: .move(to: URL(fileURLWithPath: home + "/Documents/Code/Swift")),
+                isEnabled: false
+            ),
+            Rule(
+                name: "Organize JSON Files",
+                description: "Move JSON files to Data folder",
+                conditions: [.fileExtension(is: "json")],
+                outcome: .move(to: URL(fileURLWithPath: home + "/Documents/Data/JSON")),
+                isEnabled: false
+            ),
+            
+            // MARK: - Videos
+            Rule(
+                name: "Organize MP4 Videos",
+                description: "Move MP4 videos to Videos folder",
+                conditions: [.fileExtension(is: "mp4")],
+                outcome: .move(to: URL(fileURLWithPath: home + "/Movies/Videos"))
+            ),
+            Rule(
+                name: "Organize MOV Videos",
+                description: "Move MOV videos to Videos folder",
+                conditions: [.fileExtension(is: "mov")],
+                outcome: .move(to: URL(fileURLWithPath: home + "/Movies/Videos"))
+            ),
+            Rule(
+                name: "Organize MKV Videos",
+                description: "Move MKV videos to Videos folder",
+                conditions: [.fileExtension(is: "mkv")],
+                outcome: .move(to: URL(fileURLWithPath: home + "/Movies/Videos"))
+            ),
+            Rule(
+                name: "Organize AVI Videos",
+                description: "Move AVI videos to Videos folder",
+                conditions: [.fileExtension(is: "avi")],
+                outcome: .move(to: URL(fileURLWithPath: home + "/Movies/Videos"))
+            ),
+            
+            // MARK: - Audio
+            Rule(
+                name: "Organize MP3 Music",
+                description: "Move MP3 audio files to Music folder",
+                conditions: [.fileExtension(is: "mp3")],
+                outcome: .move(to: URL(fileURLWithPath: home + "/Music/MP3"))
+            ),
+            Rule(
+                name: "Organize WAV Audio",
+                description: "Move WAV audio files to Music folder",
+                conditions: [.fileExtension(is: "wav")],
+                outcome: .move(to: URL(fileURLWithPath: home + "/Music/WAV"))
+            ),
+            Rule(
+                name: "Organize FLAC Audio",
+                description: "Move FLAC audio files to Music folder",
+                conditions: [.fileExtension(is: "flac")],
+                outcome: .move(to: URL(fileURLWithPath: home + "/Music/FLAC"))
+            ),
+            Rule(
+                name: "Organize M4A Audio",
+                description: "Move M4A audio files to Music folder",
+                conditions: [.fileExtension(is: "m4a")],
+                outcome: .move(to: URL(fileURLWithPath: home + "/Music/M4A"))
+            ),
+            
+            // MARK: - Archives
+            Rule(
+                name: "Organize ZIP Archives",
+                description: "Move ZIP files to Archives folder",
+                conditions: [.fileExtension(is: "zip")],
+                outcome: .move(to: URL(fileURLWithPath: home + "/Documents/Archives"))
+            ),
+            Rule(
+                name: "Organize RAR Archives",
+                description: "Move RAR files to Archives folder",
+                conditions: [.fileExtension(is: "rar")],
+                outcome: .move(to: URL(fileURLWithPath: home + "/Documents/Archives"))
+            ),
+            Rule(
+                name: "Organize 7Z Archives",
+                description: "Move 7Z files to Archives folder",
+                conditions: [.fileExtension(is: "7z")],
+                outcome: .move(to: URL(fileURLWithPath: home + "/Documents/Archives"))
+            ),
+            Rule(
+                name: "Organize TAR.GZ Archives",
+                description: "Move tar.gz files to Archives folder",
+                conditions: [.fileExtension(is: "gz")],
+                outcome: .move(to: URL(fileURLWithPath: home + "/Documents/Archives"))
+            ),
+            Rule(
+                name: "Organize DMG Files",
+                description: "Move disk images to Installers folder",
+                conditions: [.fileExtension(is: "dmg")],
+                outcome: .move(to: URL(fileURLWithPath: home + "/Documents/Installers"))
+            ),
+            Rule(
+                name: "Organize PKG Files",
+                description: "Move package installers to Installers folder",
+                conditions: [.fileExtension(is: "pkg")],
+                outcome: .move(to: URL(fileURLWithPath: home + "/Documents/Installers"))
+            ),
+            
+            // MARK: - Special Rules
             Rule(
                 name: "Clean Large Downloads",
                 description: "Move files larger than 100MB to a review folder",
                 conditions: [.fileSize(largerThan: 100_000_000)],
-                outcome: .move(to: URL(fileURLWithPath: NSHomeDirectory() + "/Documents/LargeFiles")),
+                outcome: .move(to: URL(fileURLWithPath: home + "/Documents/LargeFiles")),
+                isEnabled: false
+            ),
+            Rule(
+                name: "Organize Text Files",
+                description: "Move text files to Notes folder",
+                conditions: [.fileExtension(is: "txt")],
+                outcome: .move(to: URL(fileURLWithPath: home + "/Documents/Notes")),
+                isEnabled: false
+            ),
+            Rule(
+                name: "Organize Markdown Files",
+                description: "Move markdown files to Notes folder",
+                conditions: [.fileExtension(is: "md")],
+                outcome: .move(to: URL(fileURLWithPath: home + "/Documents/Notes")),
+                isEnabled: false
+            ),
+            Rule(
+                name: "Organize Log Files",
+                description: "Move log files to Logs folder",
+                conditions: [.fileExtension(is: "log")],
+                outcome: .move(to: URL(fileURLWithPath: home + "/Documents/Logs")),
+                isEnabled: false
+            ),
+            Rule(
+                name: "Organize SQL Files",
+                description: "Move SQL files to Database folder",
+                conditions: [.fileExtension(is: "sql")],
+                outcome: .move(to: URL(fileURLWithPath: home + "/Documents/Code/Database")),
                 isEnabled: false
             )
         ]
@@ -571,6 +807,8 @@ struct PlanPreviewView: View {
         appState.isExecuting = true
         
         let executor = appState.executor
+        let folderPath = appState.selectedFolderURL?.path ?? "Unknown"
+        
         DispatchQueue.global(qos: .userInitiated).async {
             let log = executor.execute(plan: plan)
             
@@ -578,6 +816,9 @@ struct PlanPreviewView: View {
                 appState.executionLog = log
                 appState.actionPlan = nil
                 appState.isExecuting = false
+                
+                // Save to history
+                appState.historyManager.recordSession(from: log, folderPath: folderPath)
             }
         }
     }
@@ -1243,45 +1484,547 @@ struct RuleEditorView: View {
 
 struct HistoryView: View {
     @ObservedObject var appState: AppState
+    @State private var showClearConfirmation = false
+    @State private var expandedSessions: Set<UUID> = []
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            HistoryHeaderView(
+                appState: appState,
+                showClearConfirmation: $showClearConfirmation
+            )
+            
+            Divider()
+            
+            // Content
+            if appState.historyManager.sessions.isEmpty {
+                HistoryEmptyStateView()
+            } else {
+                HistoryListView(
+                    appState: appState,
+                    expandedSessions: $expandedSessions
+                )
+            }
+        }
+        .background(Color(NSColor.textBackgroundColor))
+        .alert(UICopy.History.clearConfirmTitle, isPresented: $showClearConfirmation) {
+            Button(UICopy.History.cancelButton, role: .cancel) { }
+            Button(UICopy.History.clearConfirmButton, role: .destructive) {
+                appState.historyManager.clearHistory()
+            }
+        } message: {
+            Text(UICopy.History.clearConfirmMessage)
+        }
+    }
+}
+
+struct HistoryHeaderView: View {
+    @ObservedObject var appState: AppState
+    @Binding var showClearConfirmation: Bool
+    
+    var body: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(UICopy.History.title)
+                    .font(.title2)
+                    .fontWeight(.semibold)
+                
+                Text(UICopy.History.subtitle)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            
+            Spacer()
+            
+            if !appState.historyManager.sessions.isEmpty {
+                // Stats
+                HStack(spacing: 16) {
+                    StatBadge(
+                        value: "\(appState.historyManager.sessions.count)",
+                        label: "sessions"
+                    )
+                    StatBadge(
+                        value: "\(totalItems)",
+                        label: "operations"
+                    )
+                }
+                
+                Button(UICopy.History.clearAllButton) {
+                    showClearConfirmation = true
+                }
+                .buttonStyle(.bordered)
+                .foregroundColor(.red)
+            }
+        }
+        .padding(20)
+        .background(Color(NSColor.windowBackgroundColor))
+    }
+    
+    private var totalItems: Int {
+        appState.historyManager.sessions.reduce(0) { $0 + $1.items.count }
+    }
+}
+
+struct HistoryEmptyStateView: View {
+    var body: some View {
+        VStack(spacing: 20) {
+            Image(systemName: "clock.arrow.circlepath")
+                .font(.system(size: 64))
+                .foregroundColor(.secondary.opacity(0.5))
+            
+            Text(UICopy.History.emptyTitle)
+                .font(.title3)
+                .fontWeight(.medium)
+            
+            Text(UICopy.History.emptyBody)
+                .font(.body)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 300)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+struct HistoryListView: View {
+    @ObservedObject var appState: AppState
+    @Binding var expandedSessions: Set<UUID>
+    @State private var showUndoConfirmation = false
+    @State private var sessionToUndo: HistorySession?
+    @State private var undoResult: HistoryManager.UndoResult?
+    @State private var showUndoResult = false
+    
+    var body: some View {
+        List {
+            ForEach(appState.historyManager.sessions) { session in
+                HistorySessionView(
+                    session: session,
+                    isExpanded: expandedSessions.contains(session.id),
+                    historyManager: appState.historyManager,
+                    onToggle: {
+                        if expandedSessions.contains(session.id) {
+                            expandedSessions.remove(session.id)
+                        } else {
+                            expandedSessions.insert(session.id)
+                        }
+                    },
+                    onDelete: {
+                        appState.historyManager.deleteSession(session)
+                    },
+                    onUndo: {
+                        sessionToUndo = session
+                        showUndoConfirmation = true
+                    }
+                )
+            }
+        }
+        .listStyle(.inset)
+        .alert(UICopy.History.undoConfirmTitle, isPresented: $showUndoConfirmation) {
+            Button(UICopy.History.cancelButton, role: .cancel) {
+                sessionToUndo = nil
+            }
+            Button(UICopy.History.undoConfirmButton) {
+                if let session = sessionToUndo {
+                    undoResult = appState.historyManager.undoSession(session)
+                    showUndoResult = true
+                }
+                sessionToUndo = nil
+            }
+        } message: {
+            Text(UICopy.History.undoConfirmMessage)
+        }
+        .sheet(isPresented: $showUndoResult) {
+            if let result = undoResult {
+                UndoResultView(result: result, onDismiss: {
+                    showUndoResult = false
+                    undoResult = nil
+                })
+            }
+        }
+    }
+}
+
+// MARK: - Undo Result View
+
+struct UndoResultView: View {
+    let result: HistoryManager.UndoResult
+    let onDismiss: () -> Void
     
     var body: some View {
         VStack(spacing: 0) {
             // Header
             HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(UICopy.History.title)
-                        .font(.title2)
-                        .fontWeight(.semibold)
-                    
-                    Text(UICopy.History.subtitle)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
+                Image(systemName: result.isFullyRestored ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                    .foregroundColor(result.isFullyRestored ? .green : .orange)
+                    .font(.title2)
+                
+                Text(UICopy.History.undoResultTitle)
+                    .font(.headline)
                 
                 Spacer()
             }
-            .padding(20)
+            .padding()
             .background(Color(NSColor.windowBackgroundColor))
             
             Divider()
             
-            // Empty state for now
-            VStack(spacing: 16) {
-                Image(systemName: "clock.arrow.circlepath")
-                    .font(.system(size: 48))
-                    .foregroundColor(.secondary.opacity(0.5))
-                
-                Text(UICopy.History.emptyTitle)
-                    .font(.title3)
-                    .fontWeight(.medium)
-                
-                Text(UICopy.History.emptyBody)
+            // Summary
+            VStack(alignment: .leading, spacing: 12) {
+                Text(result.isFullyRestored ? UICopy.History.undoSuccessMessage : UICopy.History.undoPartialMessage)
                     .font(.body)
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
+                
+                // Stats
+                HStack(spacing: 16) {
+                    if result.restoredCount > 0 {
+                        HStack(spacing: 4) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(.green)
+                            Text("\(result.restoredCount) \(UICopy.History.undoRestored.lowercased())")
+                        }
+                    }
+                    if result.skippedCount > 0 {
+                        HStack(spacing: 4) {
+                            Image(systemName: "minus.circle.fill")
+                                .foregroundColor(.gray)
+                            Text("\(result.skippedCount) \(UICopy.History.undoSkipped.lowercased())")
+                        }
+                    }
+                    if result.failedCount > 0 {
+                        HStack(spacing: 4) {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundColor(.red)
+                            Text("\(result.failedCount) \(UICopy.History.undoFailed.lowercased())")
+                        }
+                    }
+                }
+                .font(.caption)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            
+            Divider()
+            
+            // Details list
+            List {
+                ForEach(Array(result.details.enumerated()), id: \.offset) { _, detail in
+                    HStack(spacing: 12) {
+                        outcomeIcon(for: detail.outcome)
+                            .frame(width: 20)
+                        
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(detail.fileName)
+                                .fontWeight(.medium)
+                            Text(detail.message)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        
+                        Spacer()
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+            .listStyle(.inset)
+            
+            Divider()
+            
+            // Footer
+            HStack {
+                Spacer()
+                Button(UICopy.History.okButton) {
+                    onDismiss()
+                }
+                .buttonStyle(.borderedProminent)
+            }
+            .padding()
         }
-        .background(Color(NSColor.textBackgroundColor))
+        .frame(width: 500, height: 400)
+    }
+    
+    @ViewBuilder
+    private func outcomeIcon(for outcome: HistoryManager.UndoOutcome) -> some View {
+        switch outcome {
+        case .restored:
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundColor(.green)
+        case .skipped:
+            Image(systemName: "minus.circle.fill")
+                .foregroundColor(.gray)
+        case .failed:
+            Image(systemName: "xmark.circle.fill")
+                .foregroundColor(.red)
+        }
+    }
+}
+
+struct HistorySessionView: View {
+    let session: HistorySession
+    let isExpanded: Bool
+    let historyManager: HistoryManager
+    let onToggle: () -> Void
+    let onDelete: () -> Void
+    let onUndo: () -> Void
+    
+    private var canUndo: Bool {
+        // Can undo if there are any successful items
+        session.successCount > 0
+    }
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Session header
+            HStack(spacing: 12) {
+                Button(action: onToggle) {
+                    HStack(spacing: 12) {
+                        Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                            .foregroundColor(.secondary)
+                            .frame(width: 16)
+                        
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text(session.formattedDate)
+                                    .font(.headline)
+                                
+                                Text(UICopy.History.actionAt(time: session.formattedTime))
+                                    .font(.subheadline)
+                                    .foregroundColor(.secondary)
+                            }
+                            
+                            HStack(spacing: 8) {
+                                Text("\(session.items.count) \(UICopy.History.filesProcessed)")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                
+                                Text("•")
+                                    .foregroundColor(.secondary)
+                                
+                                Text(UICopy.History.sessionSummary(
+                                    success: session.successCount,
+                                    failed: session.failedCount,
+                                    skipped: session.skippedCount
+                                ))
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            }
+                            
+                            Text(session.folderPath)
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+                
+                Spacer()
+                
+                // Summary badges
+                HStack(spacing: 6) {
+                    if session.successCount > 0 {
+                        MiniStatusBadge(count: session.successCount, color: .green)
+                    }
+                    if session.failedCount > 0 {
+                        MiniStatusBadge(count: session.failedCount, color: .red)
+                    }
+                    if session.skippedCount > 0 {
+                        MiniStatusBadge(count: session.skippedCount, color: .gray)
+                    }
+                }
+                
+                // Undo button
+                if canUndo {
+                    Button {
+                        onUndo()
+                    } label: {
+                        Label(UICopy.History.undoSessionButton, systemImage: "arrow.uturn.backward")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            }
+            .padding(.vertical, 8)
+            .contextMenu {
+                if canUndo {
+                    Button {
+                        onUndo()
+                    } label: {
+                        Label(UICopy.History.undoSessionButton, systemImage: "arrow.uturn.backward")
+                    }
+                }
+                
+                Button(role: .destructive) {
+                    onDelete()
+                } label: {
+                    Label(UICopy.History.deleteSession, systemImage: "trash")
+                }
+            }
+            
+            // Expanded items
+            if isExpanded {
+                Divider()
+                    .padding(.leading, 28)
+                
+                ForEach(session.items) { item in
+                    HistoryItemRowView(item: item, historyManager: historyManager)
+                        .padding(.leading, 28)
+                }
+            }
+        }
+        .padding(.vertical, 4)
+    }
+}
+
+struct MiniStatusBadge: View {
+    let count: Int
+    let color: Color
+    
+    var body: some View {
+        Text("\(count)")
+            .font(.caption2)
+            .fontWeight(.semibold)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(color.opacity(0.15))
+            .foregroundColor(color)
+            .cornerRadius(4)
+    }
+}
+
+struct HistoryItemRowView: View {
+    let item: HistoryItem
+    let historyManager: HistoryManager
+    
+    @State private var isHovering = false
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            // Main row
+            HStack(spacing: 12) {
+                // Action icon
+                Image(systemName: item.actionType.icon)
+                    .foregroundColor(iconColor)
+                    .frame(width: 24)
+                
+                // File info
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text(item.fileName)
+                            .fontWeight(.medium)
+                        
+                        Text(item.actionType.rawValue)
+                            .font(.caption)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(iconColor.opacity(0.15))
+                            .foregroundColor(iconColor)
+                            .cornerRadius(4)
+                        
+                        Spacer()
+                        
+                        Text(item.formattedTime)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    
+                    // Original location
+                    HStack(spacing: 4) {
+                        Text(UICopy.History.originalLocation + ":")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                        Text(item.originalPath)
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    
+                    // Current location
+                    if let currentPath = item.currentPath {
+                        HStack(spacing: 4) {
+                            Text(UICopy.History.currentLocation + ":")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                            
+                            if historyManager.fileExists(at: currentPath) {
+                                Text(currentPath)
+                                    .font(.caption2)
+                                    .foregroundColor(.blue)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                
+                                if isHovering {
+                                    Button {
+                                        historyManager.revealInFinder(path: currentPath)
+                                    } label: {
+                                        Image(systemName: "folder")
+                                            .font(.caption2)
+                                    }
+                                    .buttonStyle(.borderless)
+                                    .help(UICopy.History.revealInFinder)
+                                }
+                            } else {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "exclamationmark.triangle.fill")
+                                        .foregroundColor(.orange)
+                                    Text(UICopy.History.fileNotFound)
+                                        .foregroundColor(.orange)
+                                }
+                                .font(.caption2)
+                            }
+                        }
+                    }
+                    
+                    // Error message if failed
+                    if item.outcome == .failed, let message = item.message {
+                        HStack(spacing: 4) {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundColor(.red)
+                            Text(message)
+                                .foregroundColor(.red)
+                        }
+                        .font(.caption2)
+                    }
+                }
+                
+                Spacer()
+                
+                // Outcome indicator
+                outcomeIndicator
+            }
+            .padding(.vertical, 8)
+            .padding(.horizontal, 4)
+            .background(isHovering ? Color.secondary.opacity(0.05) : Color.clear)
+            .cornerRadius(6)
+            .onHover { hovering in
+                isHovering = hovering
+            }
+        }
+    }
+    
+    private var iconColor: Color {
+        switch item.actionType {
+        case .moved: return .blue
+        case .copied: return .green
+        case .deleted: return .orange
+        case .renamed: return .purple
+        case .skipped: return .gray
+        }
+    }
+    
+    @ViewBuilder
+    private var outcomeIndicator: some View {
+        switch item.outcome {
+        case .success:
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundColor(.green)
+        case .failed:
+            Image(systemName: "xmark.circle.fill")
+                .foregroundColor(.red)
+        case .skipped:
+            Image(systemName: "minus.circle.fill")
+                .foregroundColor(.gray)
+        }
     }
 }
