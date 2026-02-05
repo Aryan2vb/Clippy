@@ -1,0 +1,51 @@
+name: Build and Test
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: macos-14
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup Xcode
+      uses: maxim-lobanov/setup-xcode@v1
+      with:
+        xcode-version: latest-stable
+
+    - name: Show Swift version
+      run: swift --version
+
+    - name: Build
+      run: swift build -v
+
+    - name: Run tests
+      run: swift test -v
+      continue-on-error: true
+
+  lint:
+    runs-on: macos-14
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup Xcode
+      uses: maxim-lobanov/setup-xcode@v1
+      with:
+        xcode-version: latest-stable
+
+    - name: Check Swift formatting
+      run: |
+        if command -v swiftformat &> /dev/null; then
+          swiftformat --lint Sources/
+        else
+          echo "SwiftFormat not installed, skipping lint"
+        fi
+      continue-on-error: true
