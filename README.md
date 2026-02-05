@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # File Organizer
 
 A trust-centered macOS filesystem organization tool that makes changes explainable, reversible, and unsurprising.
@@ -201,11 +202,47 @@ observerExample()
 // Scan Bridge example
 scanBridgeExample()
 ```
+=======
+# FileScannerApp
+
+A macOS file management application built with Swift and SwiftUI.
+
+## Features
+
+- **File Scanning**: Traverse directories and discover files with metadata
+- **Real-time Monitoring**: Watch file system changes with FileSystemObserver
+- **File Operations**: Execute file management tasks with undo support
+- **Modern UI**: Clean SwiftUI interface for file management
+
+## Requirements
+
+- macOS 13.0 or later
+- Xcode 15.0+ or Swift 5.9+
+
+## Building
+
+### Using Swift Package Manager
+
+```bash
+# Build the project
+swift build
+
+# Run the application
+swift run FileScannerApp
+```
+
+### Using Xcode
+
+1. Open `Package.swift` in Xcode
+2. Select the `FileScannerApp` scheme
+3. Press ⌘R to build and run
+>>>>>>> f322539 (Add GitHub Actions CI workflow and README)
 
 ## Project Structure
 
 ```
 Sources/
+<<<<<<< HEAD
 ├── FileScannerApp.swift        # App entry point
 ├── ContentView.swift           # Main UI
 ├── DomainModels.swift          # Core data models (Rules, Plans, Actions)
@@ -328,3 +365,26 @@ All user-facing text must pass the 10-point checklist in `ui-copy-checklist.md`:
 ### Kalash kumari thakur
 ### Soniya Malviya
 ### Aryan Soni
+=======
+├── FileScannerApp.swift    # App entry point
+├── ContentView.swift       # Main UI view
+├── DomainModels.swift      # Core data models
+├── FileDescriptor.swift    # File metadata representation
+├── FileScanner.swift       # Directory scanning logic
+├── ScanBridge.swift        # UI-Scanner bridge
+├── FileSystemObserver.swift # Real-time file monitoring
+├── ExecutionEngine.swift   # File operation execution
+├── Planner.swift           # Task planning
+├── UndoEngine.swift        # Undo/redo support
+└── UICopy.swift            # UI text constants
+
+docs/
+├── formalSystemContract.md # System architecture
+├── ui-copy-guide.md        # UI text guidelines
+└── ui-copy-checklist.md    # QA checklist
+```
+
+## License
+
+This project is for educational purposes.
+>>>>>>> f322539 (Add GitHub Actions CI workflow and README)
