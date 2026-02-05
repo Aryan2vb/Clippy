@@ -140,13 +140,63 @@ enum UICopy {
     // MARK: - History
     enum History {
         static let title = "History"
-        static let subtitle = "Each change shows what was planned and what actually happened"
+        static let subtitle = "View all past file operations with dates, times, and current locations"
         
         static let emptyTitle = "No history yet"
-        static let emptyBody = "Actions you perform will appear here for review and undo."
+        static let emptyBody = "Actions you perform will appear here.\nYou'll see what happened, when, and where files are now."
+        
+        static let clearAllButton = "Clear All"
+        static let clearConfirmTitle = "Clear History?"
+        static let clearConfirmMessage = "This will remove all history records. This action cannot be undone."
+        static let clearConfirmButton = "Clear"
+        static let cancelButton = "Cancel"
+        
+        static let sessionHeader = "Session"
+        static let filesProcessed = "files processed"
+        
+        static let originalLocation = "Original"
+        static let currentLocation = "Current"
+        static let fileNotFound = "File no longer exists"
+        static let revealInFinder = "Reveal in Finder"
+        
+        static func sessionSummary(success: Int, failed: Int, skipped: Int) -> String {
+            var parts: [String] = []
+            if success > 0 { parts.append("\(success) succeeded") }
+            if failed > 0 { parts.append("\(failed) failed") }
+            if skipped > 0 { parts.append("\(skipped) skipped") }
+            return parts.joined(separator: ", ")
+        }
+        
+        static func actionAt(time: String) -> String {
+            "at \(time)"
+        }
+        
+        static let deleteSession = "Delete Session"
+        
+        // Undo
+        static let undoSessionButton = "Undo All"
+        static let undoItemButton = "Undo"
+        static let undoConfirmTitle = "Undo Changes?"
+        static let undoConfirmMessage = "This will restore all files to their original locations. Files that were moved will be moved back, and copies will be removed."
+        static let undoConfirmButton = "Undo Changes"
+        
+        static let undoResultTitle = "Undo Complete"
+        static let undoSuccessMessage = "All files have been restored to their original locations."
+        static let undoPartialMessage = "Some files could not be restored. See details below."
+        
+        static func undoResultSummary(restored: Int, skipped: Int, failed: Int) -> String {
+            var parts: [String] = []
+            if restored > 0 { parts.append("\(restored) restored") }
+            if skipped > 0 { parts.append("\(skipped) skipped") }
+            if failed > 0 { parts.append("\(failed) failed") }
+            return parts.joined(separator: ", ")
+        }
+        
+        static let undoRestored = "Restored"
+        static let undoSkipped = "Skipped"
+        static let undoFailed = "Failed"
+        static let okButton = "OK"
     }
-
-
     
     // MARK: - Common
     enum Common {
