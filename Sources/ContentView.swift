@@ -693,9 +693,8 @@ struct FileRowView: View {
     
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: file.isDirectory ? "folder.fill" : fileIcon)
-                .foregroundColor(file.isDirectory ? .blue : .secondary)
-                .frame(width: 24)
+            // Use FileThumbnailView for actual thumbnails and QuickLook preview
+            FileThumbnailView(file: file, size: 40, showPreviewOnTap: true)
             
             VStack(alignment: .leading, spacing: 2) {
                 Text(file.fileName)
@@ -718,17 +717,6 @@ struct FileRowView: View {
             }
         }
         .padding(.vertical, 4)
-    }
-    
-    private var fileIcon: String {
-        switch file.fileExtension.lowercased() {
-        case "pdf": return "doc.fill"
-        case "jpg", "jpeg", "png", "gif", "heic": return "photo.fill"
-        case "mp4", "mov", "avi": return "film.fill"
-        case "mp3", "wav", "m4a": return "music.note"
-        case "zip", "rar", "7z": return "archivebox.fill"
-        default: return "doc.fill"
-        }
     }
     
     private func formatBytes(_ bytes: Int64) -> String {
@@ -867,6 +855,9 @@ struct PlannedActionRowView: View {
     
     var body: some View {
         HStack(spacing: 12) {
+            // File thumbnail with preview
+            FileThumbnailView(file: action.targetFile, size: 36, showPreviewOnTap: true)
+            
             // Status icon
             actionIcon
                 .frame(width: 28)

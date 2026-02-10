@@ -2,11 +2,11 @@
 import PackageDescription
 
 let package = Package(
-    name: "FileScannerApp",
+    name: "Clippy",
     platforms: [.macOS(.v13)],
     targets: [
         .executableTarget(
-            name: "FileScannerApp",
+            name: "Clippy",
             path: "Sources"
         )
     ]
