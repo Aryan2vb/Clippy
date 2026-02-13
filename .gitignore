@@ -21,3 +21,5 @@ DerivedData/
 # Package manager caches
 Packages/
 Package.resolved
+*.dmg
+*.app
