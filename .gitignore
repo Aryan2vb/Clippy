@@ -9,6 +9,8 @@ DerivedData/
 # macOS
 .DS_Store
 *.dSYM
+*.dmg
+*.app
 
 # IDE
 .idea/
