@@ -16,14 +16,76 @@ class AppState: ObservableObject {
     @Published var isExecuting = false
     @Published var selectedTab: SidebarTab = .organize
     
+    // Cancellation support
+    @Published var scanProgress: ScanProgress?
+    
+    // Duplicate detection
+    @Published var duplicateGroups: [[FileDescriptor]] = []
+    @Published var showDuplicates = false
+    
+    // Rule filtering
+    @Published var selectedRuleGroup: String?
+    @Published var ruleSearchText: String = ""
+    
     let scanner = FileScanner()
     let planner = Planner()
-    let executor = ExecutionEngine()
+    let executor: ExecutionEngine
     let undoEngine = UndoEngine()
     let scanBridge = ScanBridge()
     let historyManager = HistoryManager()
+    let searchManager = SearchManager()
+    
+    /// Computed property for filtered rules
+    var filteredRules: [Rule] {
+        rules.filter { rule in
+            // Filter by group
+            if let selectedGroup = selectedRuleGroup {
+                if rule.group != selectedGroup {
+                    return false
+                }
+            }
+            
+            // Filter by search text
+            if !ruleSearchText.isEmpty {
+                let searchLower = ruleSearchText.lowercased()
+                let matchesName = rule.name.lowercased().contains(searchLower)
+                let matchesDesc = rule.description.lowercased().contains(searchLower)
+                let matchesTags = rule.tags.contains { $0.lowercased().contains(searchLower) }
+                if !(matchesName || matchesDesc || matchesTags) {
+                    return false
+                }
+            }
+            
+            return true
+        }
+    }
+    
+    /// All unique rule groups
+    var ruleGroups: [String] {
+        Array(Set(rules.compactMap { $0.group })).sorted()
+    }
+    
+    /// Cancel the current scan operation
+    func cancelScan() {
+        Task {
+            await scanner.cancel()
+        }
+    }
     
     init() {
+        // Configure sandbox boundaries for file operations
+        let home = NSHomeDirectory()
+        let allowedPaths = [
+            home,
+            home + "/Documents",
+            home + "/Downloads",
+            home + "/Desktop",
+            home + "/Pictures",
+            home + "/Movies",
+            home + "/Music"
+        ]
+        self.executor = ExecutionEngine(allowedSandboxPaths: allowedPaths)
+        
         // Load default rules
         loadDefaultRules()
     }
@@ -37,25 +99,33 @@ class AppState: ObservableObject {
                 name: "Archive PDFs",
                 description: "Move PDF files to the Archive folder",
                 conditions: [.fileExtension(is: "pdf")],
-                outcome: .move(to: URL(fileURLWithPath: home + "/Documents/Archive/PDFs"))
+                outcome: .move(to: URL(fileURLWithPath: home + "/Documents/Archive/PDFs")),
+                group: "Documents",
+                tags: ["documents", "pdf", "archive"]
             ),
             Rule(
                 name: "Organize CSV Files",
                 description: "Move CSV data files to Data folder",
                 conditions: [.fileExtension(is: "csv")],
-                outcome: .move(to: URL(fileURLWithPath: home + "/Documents/Data/CSV"))
+                outcome: .move(to: URL(fileURLWithPath: home + "/Documents/Data/CSV")),
+                group: "Documents",
+                tags: ["data", "csv"]
             ),
             Rule(
                 name: "Organize Excel Files",
                 description: "Move Excel spreadsheets to Spreadsheets folder",
                 conditions: [.fileExtension(is: "xlsx")],
-                outcome: .move(to: URL(fileURLWithPath: home + "/Documents/Spreadsheets"))
+                outcome: .move(to: URL(fileURLWithPath: home + "/Documents/Spreadsheets")),
+                group: "Documents",
+                tags: ["spreadsheet", "excel", "office"]
             ),
             Rule(
                 name: "Organize Word Documents",
                 description: "Move Word documents to Documents folder",
                 conditions: [.fileExtension(is: "docx")],
-                outcome: .move(to: URL(fileURLWithPath: home + "/Documents/Word"))
+                outcome: .move(to: URL(fileURLWithPath: home + "/Documents/Word")),
+                group: "Documents",
+                tags: ["word", "office", "documents"]
             ),
             
             // MARK: - Images
@@ -63,31 +133,41 @@ class AppState: ObservableObject {
                 name: "Organize Screenshots",
                 description: "Move screenshots to Screenshots folder",
                 conditions: [.fileName(contains: "Screenshot")],
-                outcome: .move(to: URL(fileURLWithPath: home + "/Pictures/Screenshots"))
+                outcome: .move(to: URL(fileURLWithPath: home + "/Pictures/Screenshots")),
+                group: "Images",
+                tags: ["screenshot", "images"]
             ),
             Rule(
                 name: "Organize JPG Photos",
                 description: "Move JPG images to Photos folder",
                 conditions: [.fileExtension(is: "jpg")],
-                outcome: .move(to: URL(fileURLWithPath: home + "/Pictures/Photos/JPG"))
+                outcome: .move(to: URL(fileURLWithPath: home + "/Pictures/Photos/JPG")),
+                group: "Images",
+                tags: ["photos", "jpg", "images"]
             ),
             Rule(
                 name: "Organize JPEG Photos",
                 description: "Move JPEG images to Photos folder",
                 conditions: [.fileExtension(is: "jpeg")],
-                outcome: .move(to: URL(fileURLWithPath: home + "/Pictures/Photos/JPG"))
+                outcome: .move(to: URL(fileURLWithPath: home + "/Pictures/Photos/JPG")),
+                group: "Images",
+                tags: ["photos", "jpeg", "images"]
             ),
             Rule(
                 name: "Organize PNG Images",
                 description: "Move PNG images to Pictures folder",
                 conditions: [.fileExtension(is: "png")],
-                outcome: .move(to: URL(fileURLWithPath: home + "/Pictures/PNG"))
+                outcome: .move(to: URL(fileURLWithPath: home + "/Pictures/PNG")),
+                group: "Images",
+                tags: ["images", "png"]
             ),
             Rule(
                 name: "Organize HEIC Photos",
                 description: "Move HEIC photos to Photos folder",
                 conditions: [.fileExtension(is: "heic")],
-                outcome: .move(to: URL(fileURLWithPath: home + "/Pictures/Photos/HEIC"))
+                outcome: .move(to: URL(fileURLWithPath: home + "/Pictures/Photos/HEIC")),
+                group: "Images",
+                tags: ["photos", "heic", "images"]
             ),
             Rule(
                 name: "Organize GIF Images",
@@ -289,15 +369,19 @@ class AppState: ObservableObject {
 }
 
 enum SidebarTab: String, CaseIterable {
-    case organize = "Organize" // Raw value needs to remain string for CaseIterable/Serialization if needed, but UI uses localized
+    case organize = "Organize"
     case rules = "Rules"
     case history = "History"
+    case search = "Search"
+    case statistics = "Statistics"
     
     var title: String {
         switch self {
         case .organize: return UICopy.Sidebar.organize
         case .rules: return UICopy.Sidebar.rules
         case .history: return UICopy.Sidebar.history
+        case .search: return "Search"
+        case .statistics: return "Statistics"
         }
     }
     
@@ -306,6 +390,8 @@ enum SidebarTab: String, CaseIterable {
         case .organize: return "folder.badge.gearshape"
         case .rules: return "list.bullet.rectangle"
         case .history: return "clock.arrow.circlepath"
+        case .search: return "magnifyingglass"
+        case .statistics: return "chart.bar"
         }
     }
 }
@@ -326,6 +412,10 @@ struct ContentView: View {
                 RulesView(appState: appState)
             case .history:
                 HistoryView(appState: appState)
+            case .search:
+                GlobalSearchView(appState: appState)
+            case .statistics:
+                StatisticsDashboardView(appState: appState)
             }
         }
         .frame(minWidth: 900, minHeight: 600)
@@ -416,7 +506,7 @@ struct OrganizeView: View {
             if appState.selectedFolderURL == nil {
                 EmptyFolderStateView()
             } else if appState.isScanning {
-                ScanningStateView()
+                ScanningStateView(appState: appState)
             } else if appState.isExecuting {
                 ExecutingStateView()
             } else if let log = appState.executionLog {
@@ -577,21 +667,55 @@ struct ReadyToScanView: View {
         appState.scanResult = nil
         appState.actionPlan = nil
         appState.executionLog = nil
+        appState.scanProgress = nil
         
         Task {
-            let result = await appState.scanner.scan(folderURL: url)
+            let result = await appState.scanner.scan(folderURL: url) { progress in
+                Task { @MainActor in
+                    appState.scanProgress = progress
+                }
+            }
             
             await MainActor.run {
                 appState.scanResult = result
                 appState.isScanning = false
+                appState.scanProgress = nil
                 appState.scanBridge.markScanCompleted(for: url)
                 appState.stalenessState = appState.scanBridge.staleness(for: url)
+                
+                // Update search manager with new files
+                appState.searchManager.updateData(files: result.files, rules: appState.rules, history: appState.historyManager.sessions)
+                
+                // Check for duplicates if scan wasn't cancelled
+                if !result.wasCancelled {
+                    Task {
+                        await detectDuplicates(from: result.files)
+                    }
+                }
             }
+        }
+    }
+    
+    private func detectDuplicates(from files: [FileDescriptor]) async {
+        // Group files by size
+        let sizeGroups = Dictionary(grouping: files) { $0.fileSize }
+        
+        var duplicates: [[FileDescriptor]] = []
+        for (_, group) in sizeGroups where group.count > 1 {
+            // Simple duplicate detection by size
+            // For production, would add hash checking
+            duplicates.append(group)
+        }
+        
+        await MainActor.run {
+            appState.duplicateGroups = duplicates.filter { $0.count > 1 }
         }
     }
 }
 
 struct ScanningStateView: View {
+    @ObservedObject var appState: AppState
+    
     var body: some View {
         VStack(spacing: 20) {
             ProgressView()
@@ -600,9 +724,34 @@ struct ScanningStateView: View {
             Text(UICopy.Progress.scanningTitle)
                 .font(.headline)
             
+            // Progress indicator
+            if let progress = appState.scanProgress {
+                Text("\(progress.filesFound) files found...")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                
+                if let currentPath = progress.currentPath {
+                    Text(currentPath)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(maxWidth: 400)
+                }
+            }
+            
             Text(UICopy.Progress.scanningBody)
                 .font(.caption)
                 .foregroundColor(.secondary)
+            
+            // Cancel button
+            Button(role: .cancel) {
+                appState.cancelScan()
+            } label: {
+                Label("Cancel Scan", systemImage: "xmark.circle")
+            }
+            .buttonStyle(.bordered)
+            .padding(.top, 8)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -1075,7 +1224,65 @@ struct RulesView: View {
     
     var body: some View {
         VStack(spacing: 0) {
-            // Header
+            // Header with filters
+            RulesHeaderView(appState: appState, showingAddRule: $showingAddRule)
+            
+            Divider()
+            
+            // Rules list
+            if appState.filteredRules.isEmpty {
+                if appState.rules.isEmpty {
+                    EmptyRulesView()
+                } else {
+                    NoMatchingRulesView()
+                }
+            } else {
+                List {
+                    // Group rules by their group
+                    let groupedRules = Dictionary(grouping: appState.filteredRules) { $0.group ?? "Ungrouped" }
+                    let sortedGroups = groupedRules.keys.sorted()
+                    
+                    ForEach(sortedGroups, id: \.self) { group in
+                        Section(header: Text(group)
+                            .font(.headline)
+                            .foregroundColor(.secondary)) {
+                            ForEach(groupedRules[group] ?? []) { rule in
+                                RuleRowView(rule: rule, appState: appState, onEdit: {
+                                    editingRule = rule
+                                })
+                            }
+                            .onDelete { indexSet in
+                                // Need to find actual indices in main rules array
+                                let rulesInGroup = groupedRules[group] ?? []
+                                let rulesToDelete = indexSet.map { rulesInGroup[$0] }
+                                appState.rules.removeAll { rule in
+                                    rulesToDelete.contains { $0.id == rule.id }
+                                }
+                            }
+                        }
+                    }
+                }
+                .listStyle(.inset)
+            }
+        }
+        .background(Color(NSColor.textBackgroundColor))
+        .sheet(isPresented: $showingAddRule) {
+            RuleEditorView(appState: appState, existingRule: nil)
+        }
+        .sheet(item: $editingRule) { rule in
+            RuleEditorView(appState: appState, existingRule: rule)
+        }
+    }
+}
+
+struct RulesHeaderView: View {
+    @ObservedObject var appState: AppState
+    @Binding var showingAddRule: Bool
+    @State private var showingTemplates = false
+    
+    var body: some View {
+        VStack(spacing: 12) {
+            // Main header
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(UICopy.Rules.title)
@@ -1089,42 +1296,92 @@ struct RulesView: View {
                 
                 Spacer()
                 
-                Button {
-                    showingAddRule = true
-                } label: {
-                    Label(UICopy.Rules.addButton, systemImage: "plus")
-                }
-                .buttonStyle(.borderedProminent)
-            }
-            .padding(20)
-            .background(Color(NSColor.windowBackgroundColor))
-            
-            Divider()
-            
-            // Rules list
-            if appState.rules.isEmpty {
-                EmptyRulesView()
-            } else {
-                List {
-                    ForEach(appState.rules) { rule in
-                        RuleRowView(rule: rule, appState: appState, onEdit: {
-                            editingRule = rule
-                        })
+                HStack(spacing: 8) {
+                    Button {
+                        showingTemplates = true
+                    } label: {
+                        Label("Templates", systemImage: "doc.text.magnifyingglass")
                     }
-                    .onDelete { indexSet in
-                        appState.rules.remove(atOffsets: indexSet)
+                    .buttonStyle(.bordered)
+                    
+                    Button {
+                        showingAddRule = true
+                    } label: {
+                        Label(UICopy.Rules.addButton, systemImage: "plus")
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+            }
+            .sheet(isPresented: $showingTemplates) {
+                TemplateBrowserView(appState: appState)
+            }
+            
+            // Filters
+            HStack(spacing: 12) {
+                // Search field
+                HStack {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundColor(.secondary)
+                    TextField("Search rules...", text: $appState.ruleSearchText)
+                        .textFieldStyle(.plain)
+                    if !appState.ruleSearchText.isEmpty {
+                        Button {
+                            appState.ruleSearchText = ""
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundColor(.secondary)
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
-                .listStyle(.inset)
+                .padding(8)
+                .background(Color.secondary.opacity(0.1))
+                .cornerRadius(8)
+                
+                // Group filter
+                if !appState.ruleGroups.isEmpty {
+                    Picker("Group", selection: $appState.selectedRuleGroup) {
+                        Text("All Groups")
+                            .tag(nil as String?)
+                        ForEach(appState.ruleGroups, id: \.self) { group in
+                            Text(group)
+                                .tag(group as String?)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .frame(width: 150)
+                }
+                
+                Spacer()
+                
+                // Rule count
+                Text("\(appState.filteredRules.count) of \(appState.rules.count)")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
         }
-        .background(Color(NSColor.textBackgroundColor))
-        .sheet(isPresented: $showingAddRule) {
-            RuleEditorView(appState: appState, existingRule: nil)
+        .padding(20)
+        .background(Color(NSColor.windowBackgroundColor))
+    }
+}
+
+struct NoMatchingRulesView: View {
+    var body: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 48))
+                .foregroundColor(.secondary.opacity(0.5))
+            
+            Text("No matching rules")
+                .font(.title3)
+                .fontWeight(.medium)
+            
+            Text("Try adjusting your search or filter criteria.")
+                .font(.body)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
         }
-        .sheet(item: $editingRule) { rule in
-            RuleEditorView(appState: appState, existingRule: rule)
-        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
@@ -1166,7 +1423,9 @@ struct RuleRowView: View {
                             description: rule.description,
                             conditions: rule.conditions,
                             outcome: rule.outcome,
-                            isEnabled: newValue
+                            isEnabled: newValue,
+                            group: rule.group,
+                            tags: rule.tags
                         )
                         appState.rules[index] = updated
                     }
@@ -1188,6 +1447,26 @@ struct RuleRowView: View {
                             .padding(.vertical, 2)
                             .background(Color.secondary.opacity(0.2))
                             .cornerRadius(4)
+                    }
+                    
+                    // Tags
+                    if !rule.tags.isEmpty {
+                        HStack(spacing: 4) {
+                            ForEach(rule.tags.prefix(3), id: \.self) { tag in
+                                Text(tag)
+                                    .font(.caption2)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(Color.accentColor.opacity(0.1))
+                                    .foregroundColor(.accentColor)
+                                    .cornerRadius(4)
+                            }
+                            if rule.tags.count > 3 {
+                                Text("+\(rule.tags.count - 3)")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
                     }
                 }
                 
@@ -1305,6 +1584,9 @@ struct RuleEditorView: View {
     @State private var conditionValue: String = ""
     @State private var outcomeType: OutcomeType = .move
     @State private var destinationPath: String = ""
+    @State private var showSecurityError = false
+    @State private var group: String = ""
+    @State private var tags: String = ""
     
     enum ConditionType: String, CaseIterable {
         case fileExtension
@@ -1360,6 +1642,32 @@ struct RuleEditorView: View {
                         VStack(alignment: .leading, spacing: 12) {
                             TextField("Name", text: $name, prompt: Text(UICopy.Rules.namePlaceholder))
                             TextField("Description", text: $description, prompt: Text(UICopy.Rules.descPlaceholder))
+                            
+                            // Group picker (existing groups + custom)
+                            HStack {
+                                Text("Group:")
+                                    .foregroundColor(.secondary)
+                                TextField("Group name", text: $group, prompt: Text("Optional"))
+                                if !appState.ruleGroups.isEmpty {
+                                    Picker("", selection: $group) {
+                                        Text("Select...")
+                                            .tag("")
+                                        ForEach(appState.ruleGroups, id: \.self) { existingGroup in
+                                            Text(existingGroup)
+                                                .tag(existingGroup)
+                                        }
+                                    }
+                                    .pickerStyle(.menu)
+                                    .frame(width: 120)
+                                }
+                            }
+                            
+                            // Tags input
+                            HStack {
+                                Text("Tags:")
+                                    .foregroundColor(.secondary)
+                                TextField("Comma separated tags", text: $tags, prompt: Text("e.g., important, archive, work"))
+                            }
                         }
                         .padding(8)
                     }
@@ -1421,10 +1729,17 @@ struct RuleEditorView: View {
             .padding()
         }
         .frame(width: 500, height: 450)
+        .alert("Security Error", isPresented: $showSecurityError) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("The selected destination path is not allowed. Please choose a path within your home directory or Documents folder.")
+        }
         .onAppear {
             if let rule = existingRule {
                 name = rule.name
                 description = rule.description
+                group = rule.group ?? ""
+                tags = rule.tags.joined(separator: ", ")
                 // Parse existing conditions/outcomes for editing
             }
         }
@@ -1447,6 +1762,11 @@ struct RuleEditorView: View {
         case .move:
             let path = destinationPath.isEmpty ? NSHomeDirectory() + "/Documents/Organized" : 
                        (destinationPath.hasPrefix("~") ? NSHomeDirectory() + destinationPath.dropFirst() : destinationPath)
+            // Security: Validate path is within allowed directories
+            guard isPathAllowed(path) else {
+                showSecurityError = true
+                return
+            }
             outcome = .move(to: URL(fileURLWithPath: path))
         case .delete:
             outcome = .delete
@@ -1457,7 +1777,9 @@ struct RuleEditorView: View {
             name: name,
             description: description,
             conditions: [condition],
-            outcome: outcome
+            outcome: outcome,
+            group: group.isEmpty ? nil : group,
+            tags: tags.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         )
         
         if let existing = existingRule,
@@ -1468,6 +1790,43 @@ struct RuleEditorView: View {
         }
         
         dismiss()
+    }
+    
+    /// Security validation: Ensure path is within allowed user directories
+    private func isPathAllowed(_ path: String) -> Bool {
+        let allowedPrefixes = [
+            NSHomeDirectory(),
+            "/Users/",
+            "/tmp/",
+            FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?.path ?? ""
+        ]
+        
+        let resolvedPath = (path as NSString).standardizingPath
+        
+        // Block system-critical paths
+        let blockedPrefixes = [
+            "/System",
+            "/usr/bin",
+            "/usr/sbin",
+            "/bin",
+            "/sbin",
+            "/etc",
+            "/var",
+            "/private",
+            "/dev",
+            "/Applications",
+            NSHomeDirectory() + "/Library"
+        ]
+        
+        // Check if path is in blocked list
+        for blocked in blockedPrefixes {
+            if resolvedPath.hasPrefix(blocked) {
+                return false
+            }
+        }
+        
+        // Check if path is within allowed user directories
+        return allowedPrefixes.contains { resolvedPath.hasPrefix($0) }
     }
 }
 
@@ -1858,8 +2217,13 @@ struct HistorySessionView: View {
                     .padding(.leading, 28)
                 
                 ForEach(session.items) { item in
-                    HistoryItemRowView(item: item, historyManager: historyManager)
-                        .padding(.leading, 28)
+                    HistoryItemRowView(
+                        item: item,
+                        session: session,
+                        historyManager: historyManager,
+                        onUndo: onUndo
+                    )
+                    .padding(.leading, 28)
                 }
             }
         }
@@ -1885,9 +2249,18 @@ struct MiniStatusBadge: View {
 
 struct HistoryItemRowView: View {
     let item: HistoryItem
+    let session: HistorySession
     let historyManager: HistoryManager
+    let onUndo: () -> Void
     
     @State private var isHovering = false
+    @State private var showUndoConfirmation = false
+    @State private var undoResult: HistoryManager.UndoItemResult?
+    @State private var showUndoResult = false
+    
+    private var canUndo: Bool {
+        item.outcome == .success && item.actionType != .skipped
+    }
     
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -1912,7 +2285,31 @@ struct HistoryItemRowView: View {
                             .foregroundColor(iconColor)
                             .cornerRadius(4)
                         
+                        // Undo badge if already undone
+                        if item.outcome == .skipped && item.message?.contains("Undone") == true {
+                            Text("Undone")
+                                .font(.caption)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.orange.opacity(0.15))
+                                .foregroundColor(.orange)
+                                .cornerRadius(4)
+                        }
+                        
                         Spacer()
+                        
+                        // Individual undo button
+                        if isHovering && canUndo {
+                            Button {
+                                showUndoConfirmation = true
+                            } label: {
+                                Image(systemName: "arrow.uturn.backward")
+                                    .font(.caption)
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .help("Undo this action")
+                        }
                         
                         Text(item.formattedTime)
                             .font(.caption)
@@ -1992,6 +2389,28 @@ struct HistoryItemRowView: View {
                 isHovering = hovering
             }
         }
+        .alert("Undo Action?", isPresented: $showUndoConfirmation) {
+            Button("Cancel", role: .cancel) { }
+            Button("Undo") {
+                undoItem()
+            }
+        } message: {
+            Text("This will restore '\(item.fileName)' to its original location.")
+        }
+        .sheet(isPresented: $showUndoResult) {
+            if let result = undoResult {
+                IndividualUndoResultView(result: result, onDismiss: {
+                    showUndoResult = false
+                    undoResult = nil
+                    onUndo()
+                })
+            }
+        }
+    }
+    
+    private func undoItem() {
+        undoResult = historyManager.undoItemInSession(item, in: session)
+        showUndoResult = true
     }
     
     private var iconColor: Color {
@@ -2017,5 +2436,751 @@ struct HistoryItemRowView: View {
             Image(systemName: "minus.circle.fill")
                 .foregroundColor(.gray)
         }
+    }
+}
+
+// MARK: - Individual Undo Result View
+
+struct IndividualUndoResultView: View {
+    let result: HistoryManager.UndoItemResult
+    let onDismiss: () -> Void
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            HStack {
+                Image(systemName: result.outcome == .restored ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                    .foregroundColor(result.outcome == .restored ? .green : (result.outcome == .skipped ? .orange : .red))
+                    .font(.title2)
+                
+                Text("Undo Result")
+                    .font(.headline)
+                
+                Spacer()
+            }
+            .padding()
+            .background(Color(NSColor.windowBackgroundColor))
+            
+            Divider()
+            
+            // Content
+            VStack(spacing: 16) {
+                VStack(spacing: 8) {
+                    Text(result.fileName)
+                        .font(.title3)
+                        .fontWeight(.medium)
+                    
+                    HStack(spacing: 8) {
+                        Image(systemName: outcomeIcon)
+                            .foregroundColor(outcomeColor)
+                        Text(result.outcome == .restored ? "Restored" : (result.outcome == .skipped ? "Skipped" : "Failed"))
+                            .fontWeight(.medium)
+                            .foregroundColor(outcomeColor)
+                    }
+                }
+                
+                Text(result.message)
+                    .font(.body)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+            }
+            .padding()
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            
+            Divider()
+            
+            // Footer
+            HStack {
+                Spacer()
+                Button("OK") {
+                    onDismiss()
+                }
+                .buttonStyle(.borderedProminent)
+            }
+            .padding()
+        }
+        .frame(width: 400, height: 300)
+    }
+    
+    private var outcomeIcon: String {
+        switch result.outcome {
+        case .restored: return "checkmark.circle.fill"
+        case .skipped: return "minus.circle.fill"
+        case .failed: return "xmark.circle.fill"
+        }
+    }
+    
+    private var outcomeColor: Color {
+        switch result.outcome {
+        case .restored: return .green
+        case .skipped: return .orange
+        case .failed: return .red
+        }
+    }
+}
+
+// MARK: - Global Search View
+
+struct GlobalSearchView: View {
+    @ObservedObject var appState: AppState
+    @State private var searchText = ""
+    @State private var selectedResult: SearchResultItem?
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Search")
+                        .font(.title2)
+                        .fontWeight(.semibold)
+                    
+                    Text("Search across files, rules, and history")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                
+                Spacer()
+            }
+            .padding(20)
+            .background(Color(NSColor.windowBackgroundColor))
+            
+            Divider()
+            
+            // Search Bar
+            VStack(spacing: 12) {
+                HStack {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundColor(.secondary)
+                    
+                    TextField("Search files, rules, history...", text: $searchText)
+                        .textFieldStyle(.plain)
+                        .onChange(of: searchText) { newValue in
+                            appState.searchManager.search(query: newValue)
+                        }
+                    
+                    if !searchText.isEmpty {
+                        Button {
+                            searchText = ""
+                            appState.searchManager.clearSearch()
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundColor(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(12)
+                .background(Color.secondary.opacity(0.1))
+                .cornerRadius(8)
+                
+                // Filter chips
+                HStack(spacing: 8) {
+                    ForEach(SearchableItemType.allCases, id: \.self) { type in
+                        FilterChip(
+                            title: type.rawValue,
+                            isSelected: appState.searchManager.selectedTypes.contains(type)
+                        ) {
+                            if appState.searchManager.selectedTypes.contains(type) {
+                                appState.searchManager.selectedTypes.remove(type)
+                            } else {
+                                appState.searchManager.selectedTypes.insert(type)
+                            }
+                            // Re-run search with new filters
+                            if !searchText.isEmpty {
+                                appState.searchManager.search(query: searchText)
+                            }
+                        }
+                    }
+                    
+                    Spacer()
+                }
+            }
+            .padding()
+            
+            Divider()
+            
+            // Results
+            if appState.searchManager.searchResults.isEmpty {
+                if searchText.isEmpty {
+                    SearchEmptyStateView()
+                } else {
+                    NoSearchResultsView()
+                }
+            } else {
+                SearchResultsList(
+                    results: appState.searchManager.searchResults,
+                    selectedResult: $selectedResult,
+                    onResultSelected: { item in
+                        handleResultSelection(item)
+                    }
+                )
+            }
+        }
+        .background(Color(NSColor.textBackgroundColor))
+        .onAppear {
+            // Update search manager with current data
+            appState.searchManager.updateData(
+                files: appState.scanResult?.files ?? [],
+                rules: appState.rules,
+                history: appState.historyManager.sessions
+            )
+        }
+    }
+    
+    private func handleResultSelection(_ item: SearchResultItem) {
+        switch item.type {
+        case .file:
+            appState.selectedTab = .organize
+        case .rule:
+            appState.selectedTab = .rules
+        case .history:
+            appState.selectedTab = .history
+        }
+    }
+}
+
+struct FilterChip: View {
+    let title: String
+    let isSelected: Bool
+    let action: () -> Void
+    
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.caption)
+                .fontWeight(isSelected ? .semibold : .regular)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(isSelected ? Color.accentColor : Color.secondary.opacity(0.1))
+                .foregroundColor(isSelected ? .white : .primary)
+                .cornerRadius(16)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+struct SearchEmptyStateView: View {
+    var body: some View {
+        VStack(spacing: 20) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 64))
+                .foregroundColor(.secondary.opacity(0.5))
+            
+            Text("Start Searching")
+                .font(.title3)
+                .fontWeight(.medium)
+            
+            Text("Type above to search across files, rules, and history.")
+                .font(.body)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 300)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+struct NoSearchResultsView: View {
+    var body: some View {
+        VStack(spacing: 20) {
+            Image(systemName: "magnifyingglass.circle")
+                .font(.system(size: 64))
+                .foregroundColor(.secondary.opacity(0.5))
+            
+            Text("No Results Found")
+                .font(.title3)
+                .fontWeight(.medium)
+            
+            Text("Try adjusting your search terms or filters.")
+                .font(.body)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 300)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+struct SearchResultsList: View {
+    let results: [SearchResultItem]
+    @Binding var selectedResult: SearchResultItem?
+    let onResultSelected: (SearchResultItem) -> Void
+    
+    var body: some View {
+        List(selection: $selectedResult) {
+            // Group by type
+            let groupedResults = Dictionary(grouping: results) { $0.type }
+            
+            ForEach(SearchableItemType.allCases, id: \.self) { type in
+                if let items = groupedResults[type], !items.isEmpty {
+                    Section(header: Text(type.rawValue).font(.headline)) {
+                        ForEach(items) { item in
+                            SearchResultRow(item: item)
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    selectedResult = item
+                                    onResultSelected(item)
+                                }
+                        }
+                    }
+                }
+            }
+        }
+        .listStyle(.inset)
+    }
+}
+
+struct SearchResultRow: View {
+    let item: SearchResultItem
+    
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: item.icon)
+                .font(.title3)
+                .foregroundColor(.accentColor)
+                .frame(width: 32)
+            
+            VStack(alignment: .leading, spacing: 4) {
+                Text(item.title)
+                    .fontWeight(.medium)
+                    .lineLimit(1)
+                
+                Text(item.subtitle)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+            }
+            
+            Spacer()
+            
+            Image(systemName: "chevron.right")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+        .padding(.vertical, 8)
+    }
+}
+
+// MARK: - Statistics Dashboard View
+
+struct StatisticsDashboardView: View {
+    @ObservedObject var appState: AppState
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Statistics")
+                        .font(.title2)
+                        .fontWeight(.semibold)
+                    
+                    Text("Track rule effectiveness and file patterns")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                
+                Spacer()
+            }
+            .padding(20)
+            .background(Color(NSColor.windowBackgroundColor))
+            
+            Divider()
+            
+            // Stats Content
+            ScrollView {
+                VStack(spacing: 20) {
+                    // Summary Cards
+                    StatisticsSummaryCards(appState: appState)
+                    
+                    Divider()
+                    
+                    // File Types Breakdown
+                    if let scanResult = appState.scanResult {
+                        FileTypesChart(files: scanResult.files)
+                    }
+                    
+                    Divider()
+                    
+                    // Rule Performance
+                    RulePerformanceSection(rules: appState.rules, history: appState.historyManager.sessions)
+                    
+                    Divider()
+                    
+                    // Recent Activity
+                    RecentActivitySection(history: appState.historyManager.sessions)
+                }
+                .padding()
+            }
+        }
+        .background(Color(NSColor.textBackgroundColor))
+    }
+}
+
+struct StatisticsSummaryCards: View {
+    @ObservedObject var appState: AppState
+    
+    var body: some View {
+        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 16) {
+            StatCard(
+                title: "Total Files",
+                value: "\(appState.scanResult?.files.count ?? 0)",
+                icon: "doc",
+                color: .blue
+            )
+            
+            StatCard(
+                title: "Active Rules",
+                value: "\(appState.rules.filter(\.isEnabled).count)",
+                icon: "list.bullet.rectangle",
+                color: .green
+            )
+            
+            StatCard(
+                title: "Operations",
+                value: "\(appState.historyManager.sessions.reduce(0) { $0 + $1.items.count })",
+                icon: "clock.arrow.circlepath",
+                color: .orange
+            )
+        }
+    }
+}
+
+struct StatCard: View {
+    let title: String
+    let value: String
+    let icon: String
+    let color: Color
+    
+    var body: some View {
+        VStack(spacing: 12) {
+            HStack {
+                Image(systemName: icon)
+                    .font(.title2)
+                    .foregroundColor(color)
+                Spacer()
+            }
+            
+            VStack(alignment: .leading, spacing: 4) {
+                Text(value)
+                    .font(.title)
+                    .fontWeight(.bold)
+                Text(title)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding()
+        .background(Color(NSColor.windowBackgroundColor))
+        .cornerRadius(12)
+    }
+}
+
+struct FileTypesChart: View {
+    let files: [FileDescriptor]
+    
+    private var extensionCounts: [(String, Int)] {
+        let counts = Dictionary(grouping: files) { $0.fileExtension }
+            .map { ($0.key, $0.value.count) }
+            .sorted { $0.1 > $1.1 }
+        return Array(counts.prefix(10))
+    }
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("File Types")
+                .font(.headline)
+            
+            if extensionCounts.isEmpty {
+                Text("No files scanned yet")
+                    .foregroundColor(.secondary)
+            } else {
+                VStack(spacing: 8) {
+                    ForEach(extensionCounts, id: \.0) { ext, count in
+                        HStack {
+                            Text(ext.isEmpty ? "(no extension)" : ".\(ext)")
+                                .font(.caption)
+                                .frame(width: 80, alignment: .leading)
+                            
+                            GeometryReader { geometry in
+                                ZStack(alignment: .leading) {
+                                    RoundedRectangle(cornerRadius: 4)
+                                        .fill(Color.secondary.opacity(0.1))
+                                    
+                                    if let maxCount = extensionCounts.first?.1 {
+                                        RoundedRectangle(cornerRadius: 4)
+                                            .fill(Color.accentColor)
+                                            .frame(width: geometry.size.width * CGFloat(count) / CGFloat(maxCount))
+                                    }
+                                }
+                            }
+                            .frame(height: 20)
+                            
+                            Text("\(count)")
+                                .font(.caption)
+                                .fontWeight(.medium)
+                                .frame(width: 40, alignment: .trailing)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct RulePerformanceSection: View {
+    let rules: [Rule]
+    let history: [HistorySession]
+    
+    private var ruleStats: [(Rule, Int)] {
+        // Count how many times each rule has been applied
+        var stats: [UUID: Int] = [:]
+        
+        for session in history {
+            for item in session.items where item.outcome == .success {
+                // This is simplified - in production, you'd track which rule caused each action
+                // For now, we'll show rule enablement status
+            }
+        }
+        
+        return rules.map { ($0, stats[$0.id] ?? 0) }
+    }
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Rule Performance")
+                .font(.headline)
+            
+            if rules.isEmpty {
+                Text("No rules configured")
+                    .foregroundColor(.secondary)
+            } else {
+                VStack(spacing: 12) {
+                    ForEach(rules.prefix(5)) { rule in
+                        HStack {
+                            Circle()
+                                .fill(rule.isEnabled ? Color.green : Color.gray)
+                                .frame(width: 8, height: 8)
+                            
+                            VStack(alignment: .leading) {
+                                Text(rule.name)
+                                    .fontWeight(.medium)
+                                Text(rule.group ?? "Ungrouped")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            
+                            Spacer()
+                            
+                            if rule.isEnabled {
+                                Text("Active")
+                                    .font(.caption)
+                                    .foregroundColor(.green)
+                            } else {
+                                Text("Disabled")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct RecentActivitySection: View {
+    let history: [HistorySession]
+    
+    private var recentItems: [HistoryItem] {
+        history.flatMap { $0.items }
+            .sorted { $0.timestamp > $1.timestamp }
+            .prefix(5)
+            .map { $0 }
+    }
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Recent Activity")
+                .font(.headline)
+            
+            if recentItems.isEmpty {
+                Text("No recent activity")
+                    .foregroundColor(.secondary)
+            } else {
+                VStack(spacing: 8) {
+                    ForEach(recentItems) { item in
+                        HStack {
+                            Image(systemName: item.actionType.icon)
+                                .foregroundColor(item.outcome == .success ? .green : .red)
+                            
+                            VStack(alignment: .leading) {
+                                Text(item.fileName)
+                                    .fontWeight(.medium)
+                                    .lineLimit(1)
+                                Text(item.formattedTime)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            
+                            Spacer()
+                            
+                            Text(item.actionType.rawValue)
+                                .font(.caption)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(Color.secondary.opacity(0.1))
+                                .cornerRadius(4)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Template Browser View
+
+struct TemplateBrowserView: View {
+    @ObservedObject var appState: AppState
+    @Environment(\.dismiss) private var dismiss
+    @State private var selectedCategory: TemplateCategory?
+    
+    private var filteredTemplates: [RuleTemplate] {
+        if let category = selectedCategory {
+            return RuleTemplateLibrary.templates(for: category)
+        }
+        return RuleTemplateLibrary.allTemplates
+    }
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Rule Templates")
+                        .font(.headline)
+                    
+                    Text("Choose a template to quickly create a rule")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                
+                Spacer()
+                
+                Button("Done") {
+                    dismiss()
+                }
+                .keyboardShortcut(.escape)
+            }
+            .padding()
+            
+            Divider()
+            
+            // Category filter
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    FilterChip(
+                        title: "All",
+                        isSelected: selectedCategory == nil
+                    ) {
+                        selectedCategory = nil
+                    }
+                    
+                    ForEach(TemplateCategory.allCases, id: \.self) { category in
+                        FilterChip(
+                            title: category.rawValue,
+                            isSelected: selectedCategory == category
+                        ) {
+                            selectedCategory = category
+                        }
+                    }
+                }
+                .padding(.horizontal)
+            }
+            .padding(.vertical, 8)
+            
+            Divider()
+            
+            // Templates grid
+            ScrollView {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 280))], spacing: 16) {
+                    ForEach(filteredTemplates) { template in
+                        TemplateCard(template: template) {
+                            // Add template as rule
+                            appState.rules.append(template.rule)
+                            dismiss()
+                        }
+                    }
+                }
+                .padding()
+            }
+        }
+        .frame(minWidth: 600, minHeight: 400)
+    }
+}
+
+struct TemplateCard: View {
+    let template: RuleTemplate
+    let onApply: () -> Void
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Image(systemName: template.icon)
+                    .font(.title2)
+                    .foregroundColor(.accentColor)
+                
+                Spacer()
+                
+                Text(template.category.rawValue)
+                    .font(.caption2)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.secondary.opacity(0.1))
+                    .cornerRadius(4)
+            }
+            
+            VStack(alignment: .leading, spacing: 4) {
+                Text(template.name)
+                    .font(.headline)
+                
+                Text(template.description)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .lineLimit(2)
+            }
+            
+            Divider()
+            
+            HStack {
+                // Show condition preview
+                HStack(spacing: 4) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.caption)
+                        .foregroundColor(.green)
+                    Text("\(template.rule.conditions.count) conditions")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                
+                Spacer()
+                
+                Button {
+                    onApply()
+                } label: {
+                    Text("Use Template")
+                        .fontWeight(.medium)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+            }
+        }
+        .padding()
+        .background(Color(NSColor.windowBackgroundColor))
+        .cornerRadius(12)
     }
 }

@@ -53,8 +53,52 @@ public final class ExecutionEngine: @unchecked Sendable {
     
     private let fileManager: FileManager
     
-    public init(fileManager: FileManager = .default) {
+    /// Allowed sandbox directories for file operations
+    private let allowedSandboxPaths: [String]
+    
+    /// Blocked system paths that should never be accessed
+    private let blockedSystemPaths = [
+        "/System",
+        "/usr/bin",
+        "/usr/sbin",
+        "/bin",
+        "/sbin",
+        "/etc",
+        "/var",
+        "/private",
+        "/dev",
+        "/Applications"
+    ]
+    
+    public init(fileManager: FileManager = .default, allowedSandboxPaths: [String]? = nil) {
         self.fileManager = fileManager
+        
+        // Default to user's home directory if no sandbox paths specified
+        if let paths = allowedSandboxPaths {
+            self.allowedSandboxPaths = paths
+        } else {
+            self.allowedSandboxPaths = [
+                NSHomeDirectory(),
+                FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?.path ?? "",
+                FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first?.path ?? "",
+                FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first?.path ?? ""
+            ].filter { !$0.isEmpty }
+        }
+    }
+    
+    /// Validates that a path is within the allowed sandbox boundaries
+    private func isPathWithinSandbox(_ path: String) -> Bool {
+        let resolvedPath = (path as NSString).standardizingPath
+        
+        // Check against blocked system paths
+        for blocked in blockedSystemPaths {
+            if resolvedPath.hasPrefix(blocked) {
+                return false
+            }
+        }
+        
+        // Check if within allowed sandbox
+        return allowedSandboxPaths.contains { resolvedPath.hasPrefix($0) }
     }
     
     /// Executes the given plan step-by-step.
@@ -63,6 +107,19 @@ public final class ExecutionEngine: @unchecked Sendable {
         var log = ExecutionLog(planId: plan.id)
         
         for action in plan.actions {
+            // Race condition protection: Validate filesystem state before each action
+            guard validateFilesystemState(for: action) else {
+                let entry = ExecutionLog.Entry(
+                    actionId: action.id,
+                    sourceURL: action.targetFile.fileURL,
+                    destinationURL: nil,
+                    outcome: .skipped,
+                    message: "Filesystem state changed since planning - file modified or missing"
+                )
+                log.entries.append(entry)
+                continue
+            }
+            
             let entry = executeSingleAction(action)
             log.entries.append(entry)
             
@@ -74,8 +131,62 @@ public final class ExecutionEngine: @unchecked Sendable {
         return log
     }
     
+    /// Validates that the filesystem state matches what was expected during planning
+    /// This prevents race conditions where files change between planning and execution
+    private func validateFilesystemState(for action: PlannedAction) -> Bool {
+        let sourceURL = action.targetFile.fileURL
+        
+        // Check file still exists at expected location
+        guard fileManager.fileExists(atPath: sourceURL.path) else {
+            return false
+        }
+        
+        // Verify file hasn't been modified since planning by checking modification time
+        if let plannedModTime = action.targetFile.modifiedAt {
+            do {
+                let attributes = try fileManager.attributesOfItem(atPath: sourceURL.path)
+                if let currentModTime = attributes[.modificationDate] as? Date {
+                    // Allow small time difference (1 second) for filesystem precision
+                    let timeDiff = abs(currentModTime.timeIntervalSince(plannedModTime))
+                    if timeDiff > 1.0 {
+                        return false
+                    }
+                }
+            } catch {
+                return false
+            }
+        }
+        
+        // Verify file size matches if available
+        if let plannedSize = action.targetFile.fileSize {
+            do {
+                let attributes = try fileManager.attributesOfItem(atPath: sourceURL.path)
+                if let currentSize = attributes[.size] as? Int64 {
+                    if currentSize != plannedSize {
+                        return false
+                    }
+                }
+            } catch {
+                return false
+            }
+        }
+        
+        return true
+    }
+    
     private func executeSingleAction(_ action: PlannedAction) -> ExecutionLog.Entry {
         let source = action.targetFile.fileURL
+        
+        // 0. Sandbox validation: Ensure source is within allowed boundaries
+        guard isPathWithinSandbox(source.path) else {
+            return ExecutionLog.Entry(
+                actionId: action.id,
+                sourceURL: source,
+                destinationURL: nil,
+                outcome: .failed,
+                message: "Source path is outside allowed sandbox boundaries"
+            )
+        }
         
         // 1. Check strict existence before doing anything
         // We verify the file is actually at the source path.
@@ -118,6 +229,17 @@ public final class ExecutionEngine: @unchecked Sendable {
     // MARK: - Safe Operations
     
     private func performMove(action: PlannedAction, to destination: URL) -> ExecutionLog.Entry {
+        // Sandbox validation: Ensure destination is within allowed boundaries
+        guard isPathWithinSandbox(destination.path) else {
+            return ExecutionLog.Entry(
+                actionId: action.id,
+                sourceURL: action.targetFile.fileURL,
+                destinationURL: destination,
+                outcome: .failed,
+                message: "Destination path is outside allowed sandbox boundaries"
+            )
+        }
+        
         // Safety: Do not overwrite
         if fileManager.fileExists(atPath: destination.path) {
             return ExecutionLog.Entry(
@@ -157,6 +279,17 @@ public final class ExecutionEngine: @unchecked Sendable {
     }
     
     private func performCopy(action: PlannedAction, to destination: URL) -> ExecutionLog.Entry {
+        // Sandbox validation: Ensure destination is within allowed boundaries
+        guard isPathWithinSandbox(destination.path) else {
+            return ExecutionLog.Entry(
+                actionId: action.id,
+                sourceURL: action.targetFile.fileURL,
+                destinationURL: destination,
+                outcome: .failed,
+                message: "Destination path is outside allowed sandbox boundaries"
+            )
+        }
+        
         if fileManager.fileExists(atPath: destination.path) {
             return ExecutionLog.Entry(
                 actionId: action.id,

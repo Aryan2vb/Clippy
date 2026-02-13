@@ -11,14 +11,150 @@ public struct Rule: Identifiable, Sendable, Codable {
     public let conditions: [RuleCondition]
     public let outcome: RuleOutcome
     public let isEnabled: Bool
+    public let group: String?
+    public let tags: [String]
     
-    public init(id: UUID = UUID(), name: String, description: String, conditions: [RuleCondition], outcome: RuleOutcome, isEnabled: Bool = true) {
+    public init(id: UUID = UUID(), name: String, description: String, conditions: [RuleCondition], outcome: RuleOutcome, isEnabled: Bool = true, group: String? = nil, tags: [String] = []) {
         self.id = id
         self.name = name
         self.description = description
         self.conditions = conditions
         self.outcome = outcome
         self.isEnabled = isEnabled
+        self.group = group
+        self.tags = tags
+    }
+}
+
+// MARK: - Rule Validation
+
+/// Validation result for rule checking
+public struct RuleValidationResult {
+    public let isValid: Bool
+    public let errors: [String]
+    public let warnings: [String]
+    
+    public init(isValid: Bool, errors: [String] = [], warnings: [String] = []) {
+        self.isValid = isValid
+        self.errors = errors
+        self.warnings = warnings
+    }
+}
+
+/// Validates rules for security and correctness
+public struct RuleValidator {
+    /// Blocked system paths that should never be accessed
+    private static let blockedPaths = [
+        "/System", "/usr/bin", "/usr/sbin", "/bin", "/sbin",
+        "/etc", "/var", "/private", "/dev", "/Applications",
+        NSHomeDirectory() + "/Library"
+    ]
+    
+    /// Allowed path prefixes for user data
+    private static let allowedPrefixes = [
+        NSHomeDirectory(),
+        "/Users/",
+        "/tmp/"
+    ]
+    
+    /// Validates a rule for security and correctness
+    public static func validate(_ rule: Rule) -> RuleValidationResult {
+        var errors: [String] = []
+        var warnings: [String] = []
+        
+        // Validate name
+        if rule.name.isEmpty {
+            errors.append("Rule name cannot be empty")
+        } else if rule.name.count > 100 {
+            warnings.append("Rule name is very long (>100 characters)")
+        }
+        
+        // Validate conditions
+        if rule.conditions.isEmpty {
+            errors.append("Rule must have at least one condition")
+        }
+        
+        for condition in rule.conditions {
+            switch condition {
+            case .fileExtension(let ext):
+                if ext.isEmpty {
+                    errors.append("File extension cannot be empty")
+                }
+                if ext.contains("/") || ext.contains("..") {
+                    errors.append("File extension contains invalid characters")
+                }
+            case .fileName(let name):
+                if name.isEmpty {
+                    errors.append("File name pattern cannot be empty")
+                }
+            case .fileSize(let size):
+                if size < 0 {
+                    errors.append("File size must be positive")
+                }
+                if size > 100_000_000_000 { // 100GB
+                    warnings.append("File size threshold is very large (>100GB)")
+                }
+            default:
+                break
+            }
+        }
+        
+        // Validate outcome paths
+        switch rule.outcome {
+        case .move(let url), .copy(let url):
+            let path = url.path
+            let resolvedPath = (path as NSString).standardizingPath
+            
+            // Check for blocked paths
+            for blocked in blockedPaths {
+                if resolvedPath.hasPrefix(blocked) {
+                    errors.append("Destination path '\(String(resolvedPath.prefix(50)))...' is in a protected system location")
+                    break
+                }
+            }
+            
+            // Check for path traversal attempts
+            if path.contains("..") || path.contains("~..") {
+                errors.append("Path contains directory traversal characters")
+            }
+            
+            // Check if within allowed areas
+            let isAllowed = allowedPrefixes.contains { resolvedPath.hasPrefix($0) }
+            if !isAllowed && !path.hasPrefix("/tmp/") {
+                warnings.append("Destination path is outside standard user directories")
+            }
+            
+        default:
+            break
+        }
+        
+        return RuleValidationResult(isValid: errors.isEmpty, errors: errors, warnings: warnings)
+    }
+    
+    /// Sanitizes a path string to prevent traversal attacks
+    public static func sanitizePath(_ path: String) -> String {
+        var sanitized = path
+        
+        // Remove null bytes
+        sanitized = sanitized.replacingOccurrences(of: "\0", with: "")
+        
+        // Normalize path traversal
+        while sanitized.contains("../") {
+            sanitized = sanitized.replacingOccurrences(of: "../", with: "")
+        }
+        while sanitized.contains("/..") {
+            sanitized = sanitized.replacingOccurrences(of: "/..", with: "")
+        }
+        
+        // Remove double slashes
+        while sanitized.contains("//") {
+            sanitized = sanitized.replacingOccurrences(of: "//", with: "/")
+        }
+        
+        // Standardize path
+        sanitized = (sanitized as NSString).standardizingPath
+        
+        return sanitized
     }
 }
 

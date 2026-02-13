@@ -426,6 +426,35 @@ public final class HistoryManager: ObservableObject {
         }
     }
     
+    /// Undoes a specific item in a session and updates the session
+    public func undoItemInSession(_ item: HistoryItem, in session: HistorySession) -> UndoItemResult {
+        let result = undoItem(item)
+        
+        // Update the session if item was successfully restored
+        if result.outcome == .restored || result.outcome == .skipped {
+            if let sessionIndex = sessions.firstIndex(where: { $0.id == session.id }) {
+                if let itemIndex = sessions[sessionIndex].items.firstIndex(where: { $0.id == item.id }) {
+                    var updatedItem = sessions[sessionIndex].items[itemIndex]
+                    // Mark as undone
+                    sessions[sessionIndex].items[itemIndex] = HistoryItem(
+                        id: updatedItem.id,
+                        timestamp: updatedItem.timestamp,
+                        actionType: updatedItem.actionType,
+                        fileName: updatedItem.fileName,
+                        originalPath: updatedItem.originalPath,
+                        currentPath: updatedItem.originalPath, // Now back at original
+                        outcome: .skipped,
+                        ruleName: updatedItem.ruleName,
+                        message: result.message
+                    )
+                    saveHistory()
+                }
+            }
+        }
+        
+        return result
+    }
+    
     // MARK: - Private Methods
     
     private func determineActionType(from entry: ExecutionLog.Entry) -> HistoryActionType {
@@ -459,16 +488,51 @@ public final class HistoryManager: ObservableObject {
     }
     
     private var historyFileURL: URL {
-        let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let appFolder = appSupport.appendingPathComponent("FileScannerApp", isDirectory: true)
-        
-        // Create directory if needed
-        if !fileManager.fileExists(atPath: appFolder.path) {
-            try? fileManager.createDirectory(at: appFolder, withIntermediateDirectories: true)
+        get {
+            let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            let appFolder = appSupport.appendingPathComponent("FileScannerApp", isDirectory: true)
+            
+            // Create directory if needed
+            if !fileManager.fileExists(atPath: appFolder.path) {
+                do {
+                    try fileManager.createDirectory(at: appFolder, withIntermediateDirectories: true)
+                } catch {
+                    DispatchQueue.main.async {
+                        self.lastError = .directoryCreationFailed(error)
+                    }
+                }
+            }
+            
+            return appFolder.appendingPathComponent(historyFileName)
         }
-        
-        return appFolder.appendingPathComponent(historyFileName)
     }
+    
+    // MARK: - Error Handling
+    
+    public enum HistoryError: Error, LocalizedError {
+        case fileNotFound
+        case decodeFailed(Error)
+        case encodeFailed(Error)
+        case writeFailed(Error)
+        case directoryCreationFailed(Error)
+        
+        public var errorDescription: String? {
+            switch self {
+            case .fileNotFound:
+                return "History file not found"
+            case .decodeFailed(let error):
+                return "Failed to decode history: \(error.localizedDescription)"
+            case .encodeFailed(let error):
+                return "Failed to encode history: \(error.localizedDescription)"
+            case .writeFailed(let error):
+                return "Failed to write history: \(error.localizedDescription)"
+            case .directoryCreationFailed(let error):
+                return "Failed to create history directory: \(error.localizedDescription)"
+            }
+        }
+    }
+    
+    @Published public private(set) var lastError: HistoryError?
     
     private func loadHistory() {
         guard fileManager.fileExists(atPath: historyFileURL.path) else {
@@ -481,8 +545,9 @@ public final class HistoryManager: ObservableObject {
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
             sessions = try decoder.decode([HistorySession].self, from: data)
+            lastError = nil
         } catch {
-            print("Failed to load history: \(error)")
+            lastError = .decodeFailed(error)
             sessions = []
         }
     }
@@ -494,8 +559,9 @@ public final class HistoryManager: ObservableObject {
             encoder.outputFormatting = .prettyPrinted
             let data = try encoder.encode(sessions)
             try data.write(to: historyFileURL, options: .atomic)
+            lastError = nil
         } catch {
-            print("Failed to save history: \(error)")
+            lastError = .writeFailed(error)
         }
     }
 }
