@@ -36,14 +36,15 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # create the realeased tag 'latest'
-          # --overwrite the existing releases
-          # --generate-notes automatically adds your commit history to the release notes.
+          # Delete existing 'latest' release if it exists
+          gh release delete latest --yes || true
+          # Delete existing 'latest' tag if it exists
+          git push origin :refs/tags/latest || true
+          # Create the release
           gh release create latest Clippy-*.dmg \
           --title "Latest Build" \
           --notes "Auto-generated build from main branch." \
-          --generate-notes \
-          --overwrite
+          --generate-notes
 
       - name: Upload DMG artifact
         uses: actions/upload-artifact@v4
