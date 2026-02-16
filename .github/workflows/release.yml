@@ -17,9 +17,6 @@ jobs:
         with:
           xcode-version: latest-stable
 
-      - name: Show Swift version
-        run: swift --version
-
       - name: Build release
         run: swift build -c release
 
@@ -32,18 +29,25 @@ jobs:
       - name: Create DMG
         run: |
           chmod +x build-dmg.sh
-          ./build-dmg.sh
+          ./build-dmg.
+
+      # dmg to latest release
+      - name: Create or Update the latest
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # create the realeased tag 'latest'
+          # --overwrite the existing releases
+          # --generate-notes automatically adds your commit history to the release notes.
+          gh release create latest Clippy-*.dmg \
+          --title "Latest Build" \
+          --notes "Auto-generated build from main branch." \
+          --generate-notes \
+          --overwrite
 
       - name: Upload DMG artifact
         uses: actions/upload-artifact@v4
         with:
           name: Clippy-DMG
           path: Clippy-*.dmg
-          retention-days: 7
-
-      - name: Upload App artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: Clippy-App
-          path: Clippy.app
           retention-days: 7
