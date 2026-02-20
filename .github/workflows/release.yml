@@ -31,6 +31,19 @@ jobs:
           ./build-dmg.sh
 
       # dmg to latest release
+      - name: Generate changelog
+        id: changelog
+        run: |
+          PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [ -n "$PREVIOUS_TAG" ]; then
+            CHANGES=$(git log $PREVIOUS_TAG..HEAD --oneline --pretty=format:"- %s (%an)" | head -20)
+          else
+            CHANGES=$(git log --oneline --pretty=format:"- %s (%an)" -20)
+          fi
+          echo "changelog<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
       - name: Create or Update the latest
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -42,7 +55,7 @@ jobs:
           # Create the release
           gh release create latest Clippy-*.dmg \
           --title "Latest Build" \
-          --notes "Auto-generated build from main branch." \
+          --notes "${{ steps.changelog.outputs.changelog }}" \
           --generate-notes
 
       - name: Upload DMG artifact
