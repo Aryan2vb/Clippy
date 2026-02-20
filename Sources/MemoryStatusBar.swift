@@ -10,7 +10,12 @@ struct MemoryInfo {
 
     var usedRAM: UInt64 { totalRAM > availableRAM ? totalRAM - availableRAM : 0 }
     var usagePercent: Double { totalRAM > 0 ? Double(usedRAM) / Double(totalRAM) : 0 }
-    var fileUsagePercent: Double { totalRAM > 0 ? Double(max(usedByFiles, 0)) / Double(totalRAM) : 0 }
+    var fileUsagePercent: Double {
+        let fileBytes = max(usedByFiles, 0)
+        guard fileBytes > 0 else { return 0 }
+        let referenceBytes: Double = 1_000_000_000 // 1 GB reference for scaling
+        return min(Double(fileBytes) / referenceBytes, 1.0)
+    }
 }
 
 // MARK: - Memory Reader
@@ -34,7 +39,7 @@ final class MemoryReader {
             let inactive = UInt64(stats.inactive_count) * pageSize
             available = free + inactive
         } else {
-            available = 0
+            available = total
         }
         return MemoryInfo(totalRAM: total, availableRAM: available, usedByFiles: fileBytes)
     }
@@ -101,7 +106,7 @@ struct MemoryStatusBar: View {
         .frame(height: 40)
         .onAppear   { triggerAnim(); startPolling() }
         .onDisappear { ticker?.invalidate() }
-        .onChange(of: fileBytes) { _ in triggerAnim() }
+        .onChange(of: fileCount) { _ in triggerAnim() }
     }
 
     // MARK: - Left Section
@@ -143,15 +148,13 @@ struct MemoryStatusBar: View {
     // MARK: - Center Bar
 
     private var centerBar: some View {
-        VStack(spacing: 3) {
+        VStack(spacing: 4) {
             GeometryReader { geo in
                 let w = geo.size.width
                 ZStack(alignment: .leading) {
-                    // track
                     RoundedRectangle(cornerRadius: 3)
                         .fill(Color.secondary.opacity(0.10))
 
-                    // RAM used – indigo/blue gradient
                     let ramW = w * CGFloat(info.usagePercent) * (animateBars ? 1 : 0)
                     RoundedRectangle(cornerRadius: 3)
                         .fill(LinearGradient(
@@ -160,34 +163,43 @@ struct MemoryStatusBar: View {
                             startPoint: .leading, endPoint: .trailing))
                         .frame(width: max(ramW, 0))
                         .animation(.easeOut(duration: 0.9), value: animateBars)
-
-                    // Files footprint – accent colour
-                    if info.fileUsagePercent > 0 {
-                        let fileW = w * CGFloat(info.fileUsagePercent) * (animateBars ? 1 : 0)
-                        RoundedRectangle(cornerRadius: 3)
-                            .fill(LinearGradient(
-                                colors: [Color.accentColor, Color.accentColor.opacity(0.7)],
-                                startPoint: .leading, endPoint: .trailing))
-                            .frame(width: max(fileW, 0))
-                            .animation(.spring(response: 0.55, dampingFraction: 0.72), value: fileBytes)
-                    }
                 }
                 .frame(height: 5)
                 .frame(maxHeight: .infinity, alignment: .center)
             }
             .frame(height: 5)
 
-            // Legend
+            GeometryReader { geo in
+                let w = geo.size.width
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(Color.secondary.opacity(0.10))
+
+                    let fileW = w * CGFloat(info.fileUsagePercent) * (animateBars ? 1 : 0)
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(LinearGradient(
+                            colors: [Color.accentColor, Color.accentColor.opacity(0.7)],
+                            startPoint: .leading, endPoint: .trailing))
+                        .frame(width: max(fileW, 0))
+                        .animation(.easeOut(duration: 0.9), value: animateBars)
+                }
+                .frame(height: 5)
+                .frame(maxHeight: .infinity, alignment: .center)
+            }
+            .frame(height: 5)
+
             HStack(spacing: 10) {
-                legendChip(color: .accentColor,
-                           label: "Files \(pct(info.fileUsagePercent))")
                 legendChip(color: Color(nsColor: .systemBlue).opacity(0.6),
                            label: "RAM \(pct(info.usagePercent))")
+                legendChip(color: .accentColor,
+                           label: "Files (disk) \(pct(info.fileUsagePercent))")
             }
             .font(.system(size: 8.5))
             .foregroundStyle(.secondary)
         }
         .padding(.horizontal, 20)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Memory usage: RAM \(pct(info.usagePercent)), Files \(fmt(fileBytes)) on disk")
     }
 
     private func legendChip(color: Color, label: String) -> some View {
@@ -262,9 +274,11 @@ struct MemoryStatusBar: View {
         }
     }
     private func startPolling() {
+        let currentFileBytes = fileBytes
         ticker = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { _ in
-            let fresh = MemoryReader.read(fileBytes: fileBytes)
+            let fresh = MemoryReader.read(fileBytes: currentFileBytes)
             withAnimation(.easeInOut(duration: 0.4)) { mem = fresh }
         }
+        RunLoop.current.add(ticker!, forMode: .common)
     }
 }
