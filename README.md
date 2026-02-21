@@ -39,7 +39,7 @@ swift build
 swift build -c release
 
 # Run the application
-swift run FileScannerApp
+swift run Clippy
 ```
 
 ### Using Xcode
