@@ -20,6 +20,7 @@ File Organizer is a macOS application designed with a fundamental principle: **c
 - **Real-time Monitoring**: Watch filesystem changes with FSEvents
 - **Undo Support**: Full undo capability for all operations
 - **Modern UI**: Clean SwiftUI interface for file management
+- **Memory Status Bar**: Shows real-time system memory information
 
 ## Requirements
 
