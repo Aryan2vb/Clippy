@@ -7,7 +7,11 @@ import ClippyEngine
 
 @MainActor
 class AppState: ObservableObject {
-    @Published var rules: [Rule] = []
+    @Published var rules: [Rule] = [] {
+        didSet {
+            saveRules()
+        }
+    }
     @Published var selectedFolderURL: URL?
     @Published var scanResult: ScanResult?
     @Published var actionPlan: ActionPlan?
@@ -36,6 +40,9 @@ class AppState: ObservableObject {
     let scanBridge = ScanBridge()
     let historyManager = HistoryManager()
     let searchManager = SearchManager()
+    
+    private let fileManager = FileManager.default
+    private let rulesFileName = "rules.json"
     
     /// Computed property for filtered rules
     var filteredRules: [Rule] {
@@ -120,8 +127,45 @@ class AppState: ObservableObject {
         ]
         self.executor = ExecutionEngine(allowedSandboxPaths: allowedPaths)
         
-        // Load default rules
-        loadDefaultRules()
+        // Load saved rules or fall back to defaults
+        loadRules()
+    }
+    
+    private var rulesFileURL: URL {
+        let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let appFolder = appSupport.appendingPathComponent("Clippy", isDirectory: true)
+        
+        if !fileManager.fileExists(atPath: appFolder.path) {
+            try? fileManager.createDirectory(at: appFolder, withIntermediateDirectories: true)
+        }
+        
+        return appFolder.appendingPathComponent(rulesFileName)
+    }
+    
+    private func loadRules() {
+        guard fileManager.fileExists(atPath: rulesFileURL.path) else {
+            loadDefaultRules()
+            return
+        }
+        
+        do {
+            let data = try Data(contentsOf: rulesFileURL)
+            let decoder = JSONDecoder()
+            rules = try decoder.decode([Rule].self, from: data)
+        } catch {
+            loadDefaultRules()
+        }
+    }
+    
+    private func saveRules() {
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = .prettyPrinted
+            let data = try encoder.encode(rules)
+            try data.write(to: rulesFileURL, options: .atomic)
+        } catch {
+            // Silent fail - rules will be re-saved on next change
+        }
     }
     
     private func loadDefaultRules() {
