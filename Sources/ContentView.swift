@@ -2,11 +2,12 @@ import SwiftUI
 import UniformTypeIdentifiers
 import ClippyCore
 import ClippyEngine
+import CryptoKit
 
 // MARK: - App State
 
 @MainActor
-class AppState: ObservableObject {
+class AppState: ObservableObject, ScanBridgeDelegate {
     @Published var rules: [Rule] = [] {
         didSet {
             saveRules()
@@ -17,6 +18,7 @@ class AppState: ObservableObject {
     @Published var actionPlan: ActionPlan?
     @Published var executionLog: ExecutionLog?
     @Published var stalenessState: ScanStalenessState?
+    @Published var cancellationMessage: String?
     
     @Published var isScanning = false
     @Published var isExecuting = false
@@ -33,6 +35,13 @@ class AppState: ObservableObject {
     @Published var selectedRuleGroup: String?
     @Published var ruleSearchText: String = ""
     
+    // Folder exclusions (user-defined)
+    @Published var userExcludedFolders: [String] = [] {
+        didSet {
+            saveExcludedFolders()
+        }
+    }
+    
     let scanner = FileScanner()
     let planner = Planner()
     let executor: ExecutionEngine
@@ -43,6 +52,7 @@ class AppState: ObservableObject {
     
     private let fileManager = FileManager.default
     private let rulesFileName = "rules.json"
+    private let excludedFoldersKey = "userExcludedFolders"
     
     /// Computed property for filtered rules
     var filteredRules: [Rule] {
@@ -81,36 +91,137 @@ class AppState: ObservableObject {
         }
     }
     
-    /// Disable all rules
+    /// Disable all rules (single save)
     func disableAllRules() {
-        for i in 0..<rules.count {
-            rules[i] = Rule(
-                id: rules[i].id,
-                name: rules[i].name,
-                description: rules[i].description,
-                conditions: rules[i].conditions,
-                outcome: rules[i].outcome,
-                isEnabled: false,
-                group: rules[i].group,
-                tags: rules[i].tags
-            )
+        var updated = rules
+        for i in updated.indices {
+            updated[i] = updated[i].withEnabled(false)
+        }
+        rules = updated
+    }
+    
+    /// Enable all rules (single save)
+    func enableAllRules() {
+        var updated = rules
+        for i in updated.indices {
+            updated[i] = updated[i].withEnabled(true)
+        }
+        rules = updated
+    }
+    
+    // MARK: - Workflow Functions (Single Source of Truth)
+    
+    func startScan() {
+        guard let url = selectedFolderURL else { return }
+        isScanning = true
+        scanResult = nil
+        actionPlan = nil
+        executionLog = nil
+        scanProgress = nil
+        cancellationMessage = nil
+        
+        // Set excluded folders before scanning
+        let excludedSet = Set(userExcludedFolders)
+        
+        Task {
+            await scanner.setExcludedFolders(excludedSet)
+            let result = await scanner.scan(folderURL: url) { progress in
+                Task { @MainActor in
+                    self.scanProgress = progress
+                }
+            }
+            await MainActor.run {
+                if result.wasCancelled {
+                    self.scanResult = nil
+                    self.cancellationMessage = "Scan was cancelled. No files were loaded."
+                } else {
+                    self.scanResult = result
+                    self.cancellationMessage = nil
+                    self.scanBridge.markScanCompleted(for: url)
+                    self.stalenessState = self.scanBridge.staleness(for: url)
+                    self.searchManager.updateData(files: result.files, rules: self.rules, history: self.historyManager.sessions)
+                    Task { await self.detectDuplicates(from: result.files) }
+                }
+                self.isScanning = false
+                self.scanProgress = nil
+            }
         }
     }
     
-    /// Enable all rules
-    func enableAllRules() {
-        for i in 0..<rules.count {
-            rules[i] = Rule(
-                id: rules[i].id,
-                name: rules[i].name,
-                description: rules[i].description,
-                conditions: rules[i].conditions,
-                outcome: rules[i].outcome,
-                isEnabled: true,
-                group: rules[i].group,
-                tags: rules[i].tags
-            )
+    func createPlan() {
+        guard let result = scanResult else { return }
+        let enabledRules = rules.filter(\.isEnabled)
+        let plan = planner.plan(files: result.files, rules: enabledRules)
+        actionPlan = plan
+    }
+    
+    func executePlan() {
+        guard let plan = actionPlan else { return }
+        guard !plan.actions.contains(where: { $0.isConflict }) else { return }
+        isExecuting = true
+        let executor = self.executor
+        let folderPath = selectedFolderURL?.path ?? "Unknown"
+        Task.detached(priority: .userInitiated) { [self] in // Changed from [weak self] to [self]
+            let log = executor.execute(plan: plan)
+            await MainActor.run {
+                self.executionLog = log
+                self.actionPlan = nil
+                self.isExecuting = false
+                self.historyManager.recordSession(from: log, folderPath: folderPath)
+            }
         }
+    }
+    
+    func performUndo() {
+        guard let log = executionLog else { return }
+        isExecuting = true
+        let undoEngine = self.undoEngine
+        Task.detached(priority: .userInitiated) {
+            let _ = undoEngine.undo(log: log)
+            await MainActor.run {
+                self.executionLog = nil
+                self.scanResult = nil
+                self.isExecuting = false
+            }
+        }
+    }
+    
+    private func detectDuplicates(from files: [FileDescriptor]) async {
+        let sizeGroups = Dictionary(grouping: files) { $0.fileSize }
+        var duplicates: [[FileDescriptor]] = []
+        for (_, group) in sizeGroups where group.count > 1 {
+            if group.count > 1 {
+                let hashGroups = await hashBasedGrouping(files: group)
+                for (_, sameHashFiles) in hashGroups where sameHashFiles.count > 1 {
+                    duplicates.append(sameHashFiles)
+                }
+            }
+        }
+        await MainActor.run {
+            self.duplicateGroups = duplicates
+        }
+    }
+    
+    private func hashBasedGrouping(files: [FileDescriptor]) async -> [String: [FileDescriptor]] {
+        var groups: [String: [FileDescriptor]] = [:]
+        for file in files {
+            if let hash = computeFileHash(file.fileURL) {
+                groups[hash, default: []].append(file)
+            }
+        }
+        return groups
+    }
+    
+    private func computeFileHash(_ url: URL) -> String? {
+        guard let fileHandle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? fileHandle.close() }
+        let bufferSize = 1024 * 1024
+        var hasher = CryptoKit.SHA256()
+        while let data = try? fileHandle.read(upToCount: bufferSize), !data.isEmpty {
+            hasher.update(data: data)
+        }
+        let digest = hasher.finalize()
+        return digest.map { String(format: "%02x", $0) }.joined()
     }
     
     init() {
@@ -127,8 +238,22 @@ class AppState: ObservableObject {
         ]
         self.executor = ExecutionEngine(allowedSandboxPaths: allowedPaths)
         
+        // Connect ScanBridge delegate
+        self.scanBridge.delegate = self
+        
         // Load saved rules or fall back to defaults
         loadRules()
+        
+        // Load saved excluded folders
+        loadExcludedFolders()
+    }
+    
+    // MARK: - ScanBridgeDelegate
+    
+    nonisolated func scanBridge(_ bridge: ScanBridge, suggestsRescan suggestion: ScanSuggestion) {
+        Task { @MainActor in
+            self.stalenessState = bridge.staleness(for: suggestion.rootURL)
+        }
     }
     
     private var rulesFileURL: URL {
@@ -166,6 +291,16 @@ class AppState: ObservableObject {
         } catch {
             // Silent fail - rules will be re-saved on next change
         }
+    }
+    
+    private func loadExcludedFolders() {
+        if let saved = UserDefaults.standard.array(forKey: excludedFoldersKey) as? [String] {
+            userExcludedFolders = saved
+        }
+    }
+    
+    private func saveExcludedFolders() {
+        UserDefaults.standard.set(userExcludedFolders, forKey: excludedFoldersKey)
     }
     
     private func loadDefaultRules() {
@@ -441,6 +576,65 @@ class AppState: ObservableObject {
                 conditions: [.fileExtension(is: "sql")],
                 outcome: .move(to: URL(fileURLWithPath: home + "/Documents/Code/Database")),
                 isEnabled: false
+            ),
+            
+            // MARK: - Junk Cleanup
+            Rule(
+                name: "Remove .DS_Store",
+                description: "macOS metadata files — safe to delete",
+                conditions: [.fileNameExact(is: ".DS_Store")],
+                outcome: .delete,
+                isEnabled: true,
+                group: "Junk Cleanup",
+                tags: ["junk", "macOS", "metadata"]
+            ),
+            Rule(
+                name: "Remove Thumbs.db",
+                description: "Windows thumbnail cache — safe to delete on Mac",
+                conditions: [.fileNameExact(is: "Thumbs.db")],
+                outcome: .delete,
+                isEnabled: true,
+                group: "Junk Cleanup",
+                tags: ["junk", "windows", "cache"]
+            ),
+            Rule(
+                name: "Remove .localized files",
+                description: "Empty localization marker files",
+                conditions: [.fileNameExact(is: ".localized")],
+                outcome: .delete,
+                isEnabled: true,
+                group: "Junk Cleanup",
+                tags: ["junk", "localization"]
+            ),
+            Rule(
+                name: "Remove Office temp files",
+                description: "Temporary files created by Microsoft Office",
+                conditions: [.fileNamePrefix(startsWith: "~$")],
+                outcome: .delete,
+                isEnabled: true,
+                group: "Junk Cleanup",
+                tags: ["junk", "office", "temp"]
+            ),
+            Rule(
+                name: "Remove .tmp files",
+                description: "Temporary files safe to delete",
+                conditions: [.fileExtension(is: "tmp")],
+                outcome: .delete,
+                isEnabled: true,
+                group: "Junk Cleanup",
+                tags: ["junk", "temp"]
+            ),
+            Rule(
+                name: "Archive old log files",
+                description: "Log files not modified in 30 days",
+                conditions: [
+                    .fileExtension(is: "log"),
+                    .modifiedBefore(date: Date().addingTimeInterval(-30 * 24 * 60 * 60))
+                ],
+                outcome: .move(to: FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!.appendingPathComponent("LogsArchive")),
+                isEnabled: false,
+                group: "Junk Cleanup",
+                tags: ["log", "archive", "old"]
             )
         ]
     }
@@ -458,6 +652,10 @@ struct ContentView: View {
             switch appState.selectedTab {
             case .organize:
                 OrganizeView(appState: appState)
+            case .spaceReclaimer:
+                SpaceReclaimerView(appState: appState)
+            case .aiSuggestions:
+                SuggestionsView(appState: appState)
             case .rules:
                 RulesView(appState: appState)
             case .history:
@@ -482,63 +680,34 @@ struct SidebarView: View {
             Label(tab.title, systemImage: tab.icon)
                 .tag(tab)
         }
+        .disabled(appState.isExecuting)
         .listStyle(.sidebar)
         .frame(minWidth: 200)
         .safeAreaInset(edge: .bottom) {
             VStack(spacing: DesignSystem.Spacing.md) {
                 Divider()
                 
-                if let url = appState.selectedFolderURL {
-                    HStack {
+                if let folder = appState.selectedFolderURL {
+                    HStack(spacing: 6) {
                         Image(systemName: "folder.fill")
-                            .foregroundColor(DesignSystem.Colors.accentBlue)
-                        Text(url.lastPathComponent)
+                            .foregroundColor(.secondary)
+                            .font(.caption)
+                        Text(folder.lastPathComponent)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
                             .lineLimit(1)
                             .truncationMode(.middle)
-                        Spacer()
                     }
-                    .font(DesignSystem.Typography.caption)
-                    .padding(.horizontal, DesignSystem.Spacing.md)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
                 }
-                
-                FolderSelectorButton(appState: appState)
-                    .padding(.horizontal, DesignSystem.Spacing.md)
-                    .padding(.bottom, DesignSystem.Spacing.md)
             }
             .background(DesignSystem.Colors.backgroundPrimary)
         }
     }
 }
 
-struct FolderSelectorButton: View {
-    @ObservedObject var appState: AppState
-    @State private var showFileImporter = false
-    
-    var body: some View {
-        Button {
-            showFileImporter = true
-        } label: {
-            Label(appState.selectedFolderURL == nil ? UICopy.Sidebar.selectFolder : UICopy.Sidebar.changeFolder,
-                  systemImage: "folder.badge.plus")
-                .frame(maxWidth: .infinity)
-        }
-        .buttonStyle(.bordered)
-        .fileImporter(
-            isPresented: $showFileImporter,
-            allowedContentTypes: [.folder],
-            allowsMultipleSelection: false
-        ) { result in
-            if case .success(let urls) = result, let url = urls.first {
-                appState.selectedFolderURL = url
-                appState.scanBridge.registerRoot(url)
-                appState.stalenessState = ScanStalenessState(rootURL: url)
-                appState.scanResult = nil
-                appState.actionPlan = nil
-                appState.executionLog = nil
-            }
-        }
-    }
-}
+
 
 // MARK: - History View
 
@@ -1330,67 +1499,7 @@ struct GlobalSearchView: View {
     }
 }
 
-struct FilterChip: View {
-    let title: String
-    let isSelected: Bool
-    let action: () -> Void
-    
-    var body: some View {
-        Button(action: action) {
-            Text(title)
-                .font(.caption)
-                .fontWeight(isSelected ? .semibold : .regular)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(isSelected ? Color.accentColor : Color.secondary.opacity(0.1))
-                .foregroundColor(isSelected ? .white : .primary)
-                .cornerRadius(16)
-        }
-        .buttonStyle(.plain)
-    }
-}
 
-struct SearchEmptyStateView: View {
-    var body: some View {
-        VStack(spacing: 20) {
-            Image(systemName: "magnifyingglass")
-                .font(.system(size: 64))
-                .foregroundColor(.secondary.opacity(0.5))
-            
-            Text("Start Searching")
-                .font(.title3)
-                .fontWeight(.medium)
-            
-            Text("Type above to search across files, rules, and history.")
-                .font(.body)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 300)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-}
-
-struct NoSearchResultsView: View {
-    var body: some View {
-        VStack(spacing: 20) {
-            Image(systemName: "magnifyingglass.circle")
-                .font(.system(size: 64))
-                .foregroundColor(.secondary.opacity(0.5))
-            
-            Text("No Results Found")
-                .font(.title3)
-                .fontWeight(.medium)
-            
-            Text("Try adjusting your search terms or filters.")
-                .font(.body)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 300)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-}
 
 struct SearchResultsList: View {
     let results: [SearchResultItem]
@@ -1620,7 +1729,7 @@ struct RulePerformanceSection: View {
     
     private var ruleStats: [(Rule, Int)] {
         // Count how many times each rule has been applied
-        var stats: [UUID: Int] = [:]
+        let stats: [UUID: Int] = [:]
         
         for session in history {
             for item in session.items where item.outcome == .success {
@@ -1766,7 +1875,7 @@ struct TemplateBrowserView: View {
             // Category filter
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
-                    FilterChip(
+                    ModernFilterChip(
                         title: "All",
                         isSelected: selectedCategory == nil
                     ) {
@@ -1774,7 +1883,7 @@ struct TemplateBrowserView: View {
                     }
                     
                     ForEach(TemplateCategory.allCases, id: \.self) { category in
-                        FilterChip(
+                        ModernFilterChip(
                             title: category.rawValue,
                             isSelected: selectedCategory == category
                         ) {

@@ -29,6 +29,7 @@ public enum TemplateCategory: String, CaseIterable, Sendable {
     case media = "Media"
     case archives = "Archives"
     case productivity = "Productivity"
+    case junk = "Junk Cleanup"
     
     public var icon: String {
         switch self {
@@ -38,6 +39,7 @@ public enum TemplateCategory: String, CaseIterable, Sendable {
         case .media: return "play.circle"
         case .archives: return "archivebox"
         case .productivity: return "checkmark.circle"
+        case .junk: return "trash.slash"
         }
     }
 }
@@ -239,6 +241,106 @@ public struct RuleTemplateLibrary {
                 outcome: .delete,
                 group: "Productivity",
                 tags: ["daily", "cleanup", "temp"]
+            )
+        ),
+        
+        // Junk Cleanup
+        RuleTemplate(
+            name: "Remove .DS_Store",
+            description: "macOS metadata files — safe to delete",
+            category: .junk,
+            icon: "applelogo",
+            rule: Rule(
+                name: "Remove .DS_Store",
+                description: "macOS metadata files — safe to delete",
+                conditions: [.fileNameExact(is: ".DS_Store")],
+                outcome: .delete,
+                isEnabled: true,
+                group: "Junk Cleanup",
+                tags: ["junk", "macOS", "metadata"]
+            )
+        ),
+        
+        RuleTemplate(
+            name: "Remove Thumbs.db",
+            description: "Windows thumbnail cache — safe to delete on Mac",
+            category: .junk,
+            icon: "photo.on.rectangle",
+            rule: Rule(
+                name: "Remove Thumbs.db",
+                description: "Windows thumbnail cache — safe to delete on Mac",
+                conditions: [.fileNameExact(is: "Thumbs.db")],
+                outcome: .delete,
+                isEnabled: true,
+                group: "Junk Cleanup",
+                tags: ["junk", "windows", "cache"]
+            )
+        ),
+        
+        RuleTemplate(
+            name: "Remove .localized files",
+            description: "Empty localization marker files",
+            category: .junk,
+            icon: "globe",
+            rule: Rule(
+                name: "Remove .localized files",
+                description: "Empty localization marker files",
+                conditions: [.fileNameExact(is: ".localized")],
+                outcome: .delete,
+                isEnabled: true,
+                group: "Junk Cleanup",
+                tags: ["junk", "localization"]
+            )
+        ),
+        
+        RuleTemplate(
+            name: "Remove Office temp files",
+            description: "Temporary files created by Microsoft Office",
+            category: .junk,
+            icon: "doc.text",
+            rule: Rule(
+                name: "Remove Office temp files",
+                description: "Temporary files created by Microsoft Office",
+                conditions: [.fileNamePrefix(startsWith: "~$")],
+                outcome: .delete,
+                isEnabled: true,
+                group: "Junk Cleanup",
+                tags: ["junk", "office", "temp"]
+            )
+        ),
+        
+        RuleTemplate(
+            name: "Remove .tmp files",
+            description: "Temporary files safe to delete",
+            category: .junk,
+            icon: "doc.badge.gearshape",
+            rule: Rule(
+                name: "Remove .tmp files",
+                description: "Temporary files safe to delete",
+                conditions: [.fileExtension(is: "tmp")],
+                outcome: .delete,
+                isEnabled: true,
+                group: "Junk Cleanup",
+                tags: ["junk", "temp"]
+            )
+        ),
+        
+        RuleTemplate(
+            name: "Archive old log files",
+            description: "Log files not modified in 30 days",
+            category: .junk,
+            icon: "doc.text.magnifyingglass",
+            rule: Rule(
+                name: "Archive old log files",
+                description: "Log files not modified in 30 days",
+                conditions: [
+                    .fileExtension(is: "log"),
+                    .modifiedBefore(date: Date().addingTimeInterval(-30 * 24 * 60 * 60))
+                ],
+                outcome: .move(to: FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!.appendingPathComponent("LogsArchive")),
+                isEnabled: false,
+                group: "Junk Cleanup",
+                tags: ["log", "archive", "old"]
             )
         )
     ]
