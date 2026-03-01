@@ -276,6 +276,7 @@ public final class ScanBridge {
     }
 }
 
+#if DEBUG
 // MARK: - Example Usage
 
 public func scanBridgeExample() {
@@ -314,3 +315,4 @@ public func scanBridgeExample() {
     bridge.markScanCompleted(for: downloadsURL)
     print("After rescan: \(bridge.staleness(for: downloadsURL)?.stalenessLevel.rawValue ?? "unknown")")
 }
+#endif

@@ -229,6 +229,7 @@ public final class UndoEngine: @unchecked Sendable {
     }
 }
 
+#if DEBUG
 // MARK: - Example Usage
 
 public func undoExample() {
@@ -292,3 +293,4 @@ public func undoExample() {
     try? fm.removeItem(at: originalSource)
     try? fm.removeItem(at: tempDir.appendingPathComponent("Archive"))
 }
+#endif

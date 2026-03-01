@@ -17,6 +17,10 @@ struct MainContentView: View {
         switch appState.selectedTab {
         case .organize:
             OrganizeView(appState: appState)
+        case .spaceReclaimer:
+            SpaceReclaimerView(appState: appState)
+        case .aiSuggestions:
+            SuggestionsView(appState: appState)
         case .rules:
             RulesView(appState: appState)
         case .history:
