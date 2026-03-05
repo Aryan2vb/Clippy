@@ -2,6 +2,8 @@ import SwiftUI
 import ClippyCore
 import ClippyEngine
 
+// MARK: - Rules View
+
 struct RulesView: View {
     @ObservedObject var appState: AppState
     @State private var showingAddRule = false
@@ -101,6 +103,8 @@ struct RulesView: View {
     }
 }
 
+// MARK: - Rules Header
+
 struct RulesHeaderView: View {
     @ObservedObject var appState: AppState
     @Binding var showingAddRule: Bool
@@ -115,7 +119,7 @@ struct RulesHeaderView: View {
                 }
                 Spacer()
                 HStack(spacing: 8) {
-                    Button { 
+                    Button {
                         let enabledCount = appState.rules.filter(\.isEnabled).count
                         if enabledCount == appState.rules.count {
                             appState.disableAllRules()
@@ -179,6 +183,8 @@ struct RulesHeaderView: View {
     }
 }
 
+// MARK: - Empty States
+
 struct NoMatchingRulesView: View {
     var body: some View {
         VStack(spacing: 16) {
@@ -232,6 +238,8 @@ struct EmptyRulesView: View {
     }
 }
 
+// MARK: - Rule Row
+
 struct RuleRowView: View {
     let rule: Rule
     @ObservedObject var appState: AppState
@@ -253,6 +261,7 @@ struct RuleRowView: View {
             ))
             .labelsHidden()
             .toggleStyle(.switch)
+            
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
                     Text(rule.name).fontWeight(.medium)
@@ -273,13 +282,18 @@ struct RuleRowView: View {
                         }
                     }
                 }
-                Text(rule.description).font(.caption).foregroundColor(.secondary)
+                
+                // Conditions summary
+                Text(conditionsSummary)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                
                 HStack(spacing: 8) {
                     ForEach(Array(rule.conditions.enumerated()), id: \.offset) { _, condition in
                         ConditionBadge(condition: condition)
                     }
                     Text("→").foregroundColor(.secondary)
-                    OutcomeBadge(outcome: rule.outcome)
+                    OutcomeChipView(outcome: rule.outcome)
                 }
                 .font(.caption2)
             }
@@ -288,8 +302,40 @@ struct RuleRowView: View {
         }
         .padding(.vertical, 8)
         .opacity(rule.isEnabled ? 1 : 0.6)
+        .contextMenu {
+            Button { onEdit() } label: {
+                Label("Edit", systemImage: "pencil")
+            }
+            Button(role: .destructive) {
+                appState.rules.removeAll { $0.id == rule.id }
+            } label: {
+                Label("Delete", systemImage: "trash")
+            }
+        }
+    }
+    
+    private var conditionsSummary: String {
+        let parts: [String] = rule.conditions.map { condition in
+            switch condition {
+            case .fileExtension(let ext): return "ext: \(ext)"
+            case .fileName(let contains): return "name: \(contains)"
+            case .fileNameExact(let exact): return "name: \(exact)"
+            case .fileNamePrefix(let prefix): return "starts: \(prefix)"
+            case .fileSize(let bytes):
+                return "size > \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))"
+            case .createdBefore(let date):
+                return "created < \(date.formatted(date: .abbreviated, time: .omitted))"
+            case .modifiedBefore(let date):
+                return "modified < \(date.formatted(date: .abbreviated, time: .omitted))"
+            case .isDirectory:
+                return "is folder"
+            }
+        }
+        return parts.joined(separator: " · ")
     }
 }
+
+// MARK: - Condition Badge
 
 struct ConditionBadge: View {
     let condition: RuleCondition
@@ -302,6 +348,8 @@ struct ConditionBadge: View {
         switch condition {
         case .fileExtension(let ext): return UICopy.Common.conditionExt(ext)
         case .fileName(let contains): return UICopy.Common.conditionContains(contains)
+        case .fileNameExact(let exact): return UICopy.Common.conditionContains(exact)
+        case .fileNamePrefix(let prefix): return UICopy.Common.conditionContains(prefix)
         case .fileSize(let bytes): return UICopy.Common.conditionSize(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))
         case .createdBefore(let date): return "created " + UICopy.Common.conditionDate(date.formatted(date: .abbreviated, time: .omitted))
         case .modifiedBefore(let date): return "modified " + UICopy.Common.conditionDate(date.formatted(date: .abbreviated, time: .omitted))
@@ -310,32 +358,8 @@ struct ConditionBadge: View {
     }
 }
 
-struct OutcomeBadge: View {
-    let outcome: RuleOutcome
-    var body: some View {
-        Text(outcomeText)
-            .padding(.horizontal, 8).padding(.vertical, 3)
-            .background(outcomeColor.opacity(0.1)).foregroundColor(outcomeColor).cornerRadius(4)
-    }
-    private var outcomeText: String {
-        switch outcome {
-        case .move(let url): return UICopy.Execution.movedTo(url.lastPathComponent)
-        case .copy(let url): return "Copy to \(url.lastPathComponent)"
-        case .delete: return UICopy.Rules.actionDelete
-        case .rename(let prefix, let suffix): return UICopy.Common.outcomeRename(prefix, suffix)
-        case .skip(let reason): return UICopy.Execution.skipped(reason)
-        }
-    }
-    private var outcomeColor: Color {
-        switch outcome {
-        case .move: return .green
-        case .copy: return .blue
-        case .delete: return .orange
-        case .rename: return .purple
-        case .skip: return .secondary
-        }
-    }
-}
+
+// MARK: - Prefill Data
 
 struct PrefillData {
     var fileExtension: String = ""
@@ -343,44 +367,62 @@ struct PrefillData {
     var suggestedDestination: String = ""
 }
 
+// MARK: - Rule Editor
+
 struct RuleEditorView: View {
     @ObservedObject var appState: AppState
     let existingRule: Rule?
     var prefillData: PrefillData?
     @Environment(\.dismiss) private var dismiss
+    
     @State private var name: String = ""
     @State private var description: String = ""
-    @State private var conditionType: ConditionType = .fileExtension
-    @State private var conditionValue: String = ""
+    @State private var conditions: [ConditionEntry] = [ConditionEntry()]
     @State private var outcomeType: OutcomeType = .move
     @State private var destinationPath: String = ""
+    @State private var renamePrefix: String = ""
+    @State private var renameSuffix: String = ""
+    @State private var skipReason: String = ""
     @State private var showSecurityError = false
     @State private var group: String = ""
     @State private var tags: String = ""
+    @State private var validationError: String?
     
-    enum ConditionType: String, CaseIterable {
-        case fileExtension, fileName, fileSize
-        var rawValue: String {
-            switch self {
-            case .fileExtension: return UICopy.Rules.conditionExtension
-            case .fileName: return UICopy.Rules.conditionName
-            case .fileSize: return UICopy.Rules.conditionSize
-            }
-        }
+    // MARK: - Condition Types
+    
+    enum ConditionType: String, CaseIterable, Identifiable {
+        case fileExtension = "File Extension"
+        case fileName = "File Name Contains"
+        case fileSize = "File Size Larger Than"
+        case createdBefore = "Created Before"
+        case modifiedBefore = "Modified Before"
+        case isDirectory = "Is Directory"
+        
+        var id: String { rawValue }
     }
     
-    enum OutcomeType: String, CaseIterable {
-        case move, delete
-        var rawValue: String {
-            switch self {
-            case .move: return UICopy.Rules.actionMove
-            case .delete: return UICopy.Rules.actionDelete
-            }
-        }
+    struct ConditionEntry: Identifiable {
+        let id = UUID()
+        var type: ConditionType = .fileExtension
+        var value: String = ""
+        var dateValue: Date = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
+    }
+    
+    // MARK: - Outcome Types
+    
+    enum OutcomeType: String, CaseIterable, Identifiable {
+        case move = "Move to Folder"
+        case copy = "Copy to Folder"
+        case delete = "Move to Trash"
+        case rename = "Rename"
+        case skip = "Skip (do nothing)"
+        
+        var id: String { rawValue }
     }
     
     var body: some View {
         VStack(spacing: 0) {
+            // Header
             HStack {
                 Text(existingRule == nil ? UICopy.Rules.editorAddTitle : UICopy.Rules.editorEditTitle).font(.headline)
                 Spacer()
@@ -388,8 +430,10 @@ struct RuleEditorView: View {
             }
             .padding()
             Divider()
+            
             ScrollView {
                 VStack(spacing: 24) {
+                    // Details section
                     GroupBox(label: Text(UICopy.Rules.sectionDetails).font(.headline)) {
                         VStack(alignment: .leading, spacing: 12) {
                             TextField("Name", text: $name, prompt: Text(UICopy.Rules.namePlaceholder))
@@ -412,28 +456,93 @@ struct RuleEditorView: View {
                         }
                         .padding(8)
                     }
-                    GroupBox(label: Text(UICopy.Rules.sectionConditions).font(.headline)) {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Picker("Condition", selection: $conditionType) {
-                                ForEach(ConditionType.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-                            }
-                            .labelsHidden()
-                            switch conditionType {
-                            case .fileExtension: TextField("Extension", text: $conditionValue, prompt: Text("pdf"))
-                            case .fileName: TextField("Contains", text: $conditionValue, prompt: Text("Screenshot"))
-                            case .fileSize: TextField("Size in MB", text: $conditionValue, prompt: Text("100"))
+                    
+                    // Conditions section (add/remove multiple)
+                    GroupBox(label: HStack {
+                        Text(UICopy.Rules.sectionConditions).font(.headline)
+                        Spacer()
+                        Button {
+                            conditions.append(ConditionEntry())
+                        } label: {
+                            Label("Add Condition", systemImage: "plus.circle")
+                        }
+                        .buttonStyle(.borderless)
+                        .controlSize(.small)
+                    }) {
+                        VStack(spacing: 12) {
+                            ForEach(Array(conditions.enumerated()), id: \.element.id) { index, entry in
+                                HStack(alignment: .top, spacing: 8) {
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        Picker("Condition", selection: $conditions[index].type) {
+                                            ForEach(ConditionType.allCases) { type in
+                                                Text(type.rawValue).tag(type)
+                                            }
+                                        }
+                                        .labelsHidden()
+                                        
+                                        conditionValueField(for: index)
+                                    }
+                                    
+                                    if conditions.count > 1 {
+                                        Button {
+                                            conditions.remove(at: index)
+                                        } label: {
+                                            Image(systemName: "minus.circle.fill")
+                                                .foregroundColor(.red)
+                                        }
+                                        .buttonStyle(.borderless)
+                                    }
+                                }
+                                
+                                if index < conditions.count - 1 {
+                                    Divider()
+                                }
                             }
                         }
                         .padding(8)
                     }
+                    
+                    // Outcome section
                     GroupBox(label: Text(UICopy.Rules.sectionOutcomes).font(.headline)) {
                         VStack(alignment: .leading, spacing: 12) {
                             Picker("Action", selection: $outcomeType) {
-                                ForEach(OutcomeType.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                                ForEach(OutcomeType.allCases) { type in
+                                    Text(type.rawValue).tag(type)
+                                }
                             }
                             .labelsHidden()
-                            if outcomeType == .move {
-                                TextField("Destination folder path", text: $destinationPath, prompt: Text("~/Documents/Archive"))
+                            
+                            switch outcomeType {
+                            case .move, .copy:
+                                HStack {
+                                    TextField("Destination folder path", text: $destinationPath, prompt: Text("~/Documents/Archive"))
+                                    Button("Browse…") {
+                                        browseForFolder()
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
+                                }
+                            case .rename:
+                                HStack(spacing: 12) {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text("Prefix:").font(.caption).foregroundColor(.secondary)
+                                        TextField("Prefix", text: $renamePrefix, prompt: Text("archived_"))
+                                    }
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text("Suffix:").font(.caption).foregroundColor(.secondary)
+                                        TextField("Suffix", text: $renameSuffix, prompt: Text("_old"))
+                                    }
+                                }
+                            case .skip:
+                                TextField("Reason for skipping", text: $skipReason, prompt: Text("e.g., System file, do not modify"))
+                            case .delete:
+                                HStack(spacing: DesignSystem.Spacing.sm) {
+                                    Image(systemName: "exclamationmark.triangle.fill")
+                                        .foregroundColor(.red)
+                                    Text("Files matching this rule will be moved to Trash.")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
                             }
                         }
                         .padding(8)
@@ -441,55 +550,195 @@ struct RuleEditorView: View {
                 }
                 .padding()
             }
+            
             Divider()
+            
+            // Footer
             HStack {
+                if let error = validationError {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundColor(.red)
+                        .lineLimit(2)
+                }
                 Spacer()
+                Button(UICopy.Rules.cancelButton) { dismiss() }
+                    .buttonStyle(.bordered)
                 Button(UICopy.Rules.saveButton) { saveRule() }
                     .buttonStyle(.borderedProminent)
                     .disabled(name.isEmpty)
             }
             .padding()
         }
-        .frame(width: 500, height: 450)
+        .frame(width: 560, height: 550)
         .alert("Security Error", isPresented: $showSecurityError) {
             Button("OK", role: .cancel) { }
         } message: {
             Text("The selected destination path is not allowed. Please choose a path within your home directory or Documents folder.")
         }
         .onAppear {
-            if let rule = existingRule {
-                name = rule.name
-                description = rule.description
-                group = rule.group ?? ""
-                tags = rule.tags.joined(separator: ", ")
+            populateFields()
+        }
+    }
+    
+    // MARK: - Condition Value Field
+    
+    @ViewBuilder
+    private func conditionValueField(for index: Int) -> some View {
+        switch conditions[index].type {
+        case .fileExtension:
+            TextField("Extension", text: $conditions[index].value, prompt: Text("pdf"))
+        case .fileName:
+            TextField("Contains", text: $conditions[index].value, prompt: Text("Screenshot"))
+        case .fileSize:
+            TextField("Size in MB", text: $conditions[index].value, prompt: Text("100"))
+        case .createdBefore:
+            DatePicker("Before:", selection: $conditions[index].dateValue, displayedComponents: .date)
+        case .modifiedBefore:
+            DatePicker("Before:", selection: $conditions[index].dateValue, displayedComponents: .date)
+        case .isDirectory:
+            Text("Matches all directories/folders")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+    }
+    
+    // MARK: - Populate from existing rule or prefill
+    
+    private func populateFields() {
+        if let rule = existingRule {
+            name = rule.name
+            description = rule.description
+            group = rule.group ?? ""
+            tags = rule.tags.joined(separator: ", ")
+            
+            // Populate conditions
+            conditions = rule.conditions.map { condition in
+                var entry = ConditionEntry()
+                switch condition {
+                case .fileExtension(let ext):
+                    entry.type = .fileExtension
+                    entry.value = ext
+                case .fileName(let contains):
+                    entry.type = .fileName
+                    entry.value = contains
+                case .fileNameExact(let exact):
+                    entry.type = .fileName
+                    entry.value = exact
+                case .fileNamePrefix(let prefix):
+                    entry.type = .fileName
+                    entry.value = prefix
+                case .fileSize(let bytes):
+                    entry.type = .fileSize
+                    entry.value = "\(bytes / 1_000_000)"
+                case .createdBefore(let date):
+                    entry.type = .createdBefore
+                    entry.dateValue = date
+                case .modifiedBefore(let date):
+                    entry.type = .modifiedBefore
+                    entry.dateValue = date
+                case .isDirectory:
+                    entry.type = .isDirectory
+                }
+                return entry
+            }
+            if conditions.isEmpty {
+                conditions = [ConditionEntry()]
+            }
+            
+            // Populate outcome
+            switch rule.outcome {
+            case .move(let url):
+                outcomeType = .move
+                destinationPath = url.path
+            case .copy(let url):
+                outcomeType = .copy
+                destinationPath = url.path
+            case .delete:
+                outcomeType = .delete
+            case .rename(let prefix, let suffix):
+                outcomeType = .rename
+                renamePrefix = prefix ?? ""
+                renameSuffix = suffix ?? ""
+            case .skip(let reason):
+                outcomeType = .skip
+                skipReason = reason
+            }
+        } else if let prefill = prefillData {
+            if !prefill.fileExtension.isEmpty {
+                conditions = [ConditionEntry()]
+                conditions[0].type = .fileExtension
+                conditions[0].value = prefill.fileExtension
+            }
+            if !prefill.suggestedDestination.isEmpty {
+                destinationPath = prefill.suggestedDestination
             }
         }
     }
     
+    // MARK: - Save Rule
+    
     private func saveRule() {
-        let condition: RuleCondition
-        switch conditionType {
-        case .fileExtension: condition = .fileExtension(is: conditionValue)
-        case .fileName: condition = .fileName(contains: conditionValue)
-        case .fileSize:
-            let mb = Int64(conditionValue) ?? 100
-            condition = .fileSize(largerThan: mb * 1_000_000)
+        // Build conditions
+        let ruleConditions: [RuleCondition] = conditions.compactMap { entry in
+            switch entry.type {
+            case .fileExtension:
+                guard !entry.value.isEmpty else { return nil }
+                return .fileExtension(is: entry.value)
+            case .fileName:
+                guard !entry.value.isEmpty else { return nil }
+                return .fileName(contains: entry.value)
+            case .fileSize:
+                let mb = Int64(entry.value) ?? 100
+                return .fileSize(largerThan: mb * 1_000_000)
+            case .createdBefore:
+                return .createdBefore(date: entry.dateValue)
+            case .modifiedBefore:
+                return .modifiedBefore(date: entry.dateValue)
+            case .isDirectory:
+                return .isDirectory
+            }
         }
+        
+        guard !ruleConditions.isEmpty else { return }
+        
+        // Build outcome
         let outcome: RuleOutcome
         switch outcomeType {
         case .move:
-            let path = destinationPath.isEmpty ? NSHomeDirectory() + "/Documents/Organized" :
-                (destinationPath.hasPrefix("~") ? NSHomeDirectory() + destinationPath.dropFirst() : destinationPath)
+            let path = resolvePath(destinationPath)
             guard isPathAllowed(path) else { showSecurityError = true; return }
             outcome = .move(to: URL(fileURLWithPath: path))
-        case .delete: outcome = .delete
+        case .copy:
+            let path = resolvePath(destinationPath)
+            guard isPathAllowed(path) else { showSecurityError = true; return }
+            outcome = .copy(to: URL(fileURLWithPath: path))
+        case .delete:
+            outcome = .delete
+        case .rename:
+            outcome = .rename(
+                prefix: renamePrefix.isEmpty ? nil : renamePrefix,
+                suffix: renameSuffix.isEmpty ? nil : renameSuffix
+            )
+        case .skip:
+            outcome = .skip(reason: skipReason.isEmpty ? "Manually skipped" : skipReason)
         }
+        
         let rule = Rule(
             id: existingRule?.id ?? UUID(), name: name, description: description,
-            conditions: [condition], outcome: outcome,
+            conditions: ruleConditions, outcome: outcome,
             group: group.isEmpty ? nil : group,
             tags: tags.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         )
+        
+        // Validate rule before saving
+        let validationResult = RuleValidator.validate(rule)
+        guard validationResult.isValid else {
+            validationError = validationResult.errors.joined(separator: ". ")
+            return
+        }
+        validationError = nil
+        
         if let existing = existingRule, let index = appState.rules.firstIndex(where: { $0.id == existing.id }) {
             appState.rules[index] = rule
         } else {
@@ -498,11 +747,34 @@ struct RuleEditorView: View {
         dismiss()
     }
     
+    private func resolvePath(_ path: String) -> String {
+        if path.isEmpty {
+            return NSHomeDirectory() + "/Documents/Organized"
+        }
+        if path.hasPrefix("~") {
+            return NSHomeDirectory() + String(path.dropFirst())
+        }
+        return path
+    }
+    
     private func isPathAllowed(_ path: String) -> Bool {
-        let allowedPrefixes = [NSHomeDirectory(), "/Users/", "/tmp/", FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?.path ?? ""]
+        let allowedPrefixes = [NSHomeDirectory(), "/tmp/", FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?.path ?? ""]
         let resolvedPath = (path as NSString).standardizingPath
         let blockedPrefixes = ["/System", "/usr/bin", "/usr/sbin", "/bin", "/sbin", "/etc", "/var", "/private", "/dev", "/Applications", NSHomeDirectory() + "/Library"]
         for blocked in blockedPrefixes { if resolvedPath.hasPrefix(blocked) { return false } }
         return allowedPrefixes.contains { resolvedPath.hasPrefix($0) }
+    }
+    
+    private func browseForFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Select"
+        panel.message = "Choose a destination folder for this rule"
+        
+        if panel.runModal() == .OK, let url = panel.url {
+            destinationPath = url.path
+        }
     }
 }

@@ -7,12 +7,26 @@ public struct ScanResult: Sendable {
     public let errors: [ScanError]
     public let wasCancelled: Bool
     public let scannedFileCount: Int
+    public let skippedFolders: [SkippedFolder]
     
-    public init(files: [FileDescriptor], errors: [ScanError], wasCancelled: Bool = false, scannedFileCount: Int? = nil) {
+    public init(files: [FileDescriptor], errors: [ScanError], wasCancelled: Bool = false, scannedFileCount: Int? = nil, skippedFolders: [SkippedFolder]? = nil) {
         self.files = files
         self.errors = errors
         self.wasCancelled = wasCancelled
         self.scannedFileCount = scannedFileCount ?? files.count
+        self.skippedFolders = skippedFolders ?? []
+    }
+}
+
+/// A folder that was skipped during scanning with reason.
+public struct SkippedFolder: Sendable, Identifiable {
+    public let id = UUID()
+    public let url: URL
+    public let reason: String
+    
+    public init(url: URL, reason: String) {
+        self.url = url
+        self.reason = reason
     }
 }
 
@@ -40,8 +54,19 @@ public struct ScanProgress: Sendable {
 /// Designed to be detached from UI, efficient, and safe with cancellation support.
 public actor FileScanner {
     
+    /// Default folders to exclude from scanning (dependency and build folders)
+    public static let defaultExcludedFolders: Set<String> = [
+        "node_modules", ".venv", "venv", "env", ".env",
+        ".git", "__pycache__", ".next", "dist", "build",
+        "Pods", ".tox", ".yarn", "coverage", ".turbo",
+        ".svn", "target", "out", ".output", ".nuxt",
+        "vendor", ".bundle", ".cargo", ".gradle"
+    ]
+    
     private var currentTask: Task<ScanResult, Never>?
     private var isCancelled = false
+    private var excludedFolders: Set<String> = FileScanner.defaultExcludedFolders
+    private var skippedFolders: [SkippedFolder] = []
     
     public init() {}
     
@@ -54,6 +79,21 @@ public actor FileScanner {
     /// Resets the cancellation state for a new scan
     private func resetCancellation() {
         isCancelled = false
+        skippedFolders = []
+    }
+    
+    /// Sets custom excluded folders (union with default exclusions)
+    public func setExcludedFolders(_ folders: Set<String>) {
+        excludedFolders = FileScanner.defaultExcludedFolders.union(folders)
+    }
+    
+    /// Checks if a folder should be excluded
+    private func isExcludedFolder(_ url: URL) -> Bool {
+        let folderName = url.lastPathComponent
+        if FileScanner.defaultExcludedFolders.contains(folderName) {
+            return true
+        }
+        return excludedFolders.contains(folderName)
     }
     
     /// Recursively scans the folder at the given URL with progress callback.
@@ -77,7 +117,10 @@ public actor FileScanner {
     }
     
     /// Scans with additional options for duplicate detection
-    public func scanWithDuplicateDetection(folderURL: URL, progressHandler: (@Sendable (ScanProgress) -> Void)? = nil) async -> (scanResult: ScanResult, duplicates: [[FileDescriptor]]) {
+    public func scanWithDuplicateDetection(folderURL: URL, progressHandler: (@Sendable (ScanProgress) -> Void)? = nil, excludedFolders: Set<String> = []) async -> (scanResult: ScanResult, duplicates: [[FileDescriptor]]) {
+        // Set excluded folders before scanning
+        setExcludedFolders(excludedFolders)
+        
         let scanResult = await scan(folderURL: folderURL, progressHandler: progressHandler)
         
         if Task.isCancelled || isCancelled {
@@ -161,13 +204,29 @@ public actor FileScanner {
             if Task.isCancelled || isCancelled {
                 let progress = ScanProgress(filesFound: fileCount, currentPath: fileURL.path, isCancelled: true)
                 progressHandler?(progress)
-                return ScanResult(files: files, errors: errorCollector.errors, wasCancelled: true, scannedFileCount: fileCount)
+                return ScanResult(files: files, errors: errorCollector.errors, wasCancelled: true, scannedFileCount: fileCount, skippedFolders: skippedFolders)
             }
             
             do {
                 // Fetch cached resource values.
                 // Note: We use the set of keys defined above.
                 let resourceValues = try fileURL.resourceValues(forKeys: Set(keys))
+                
+                let isDirectory = resourceValues.isDirectory ?? false
+                
+                // Skip excluded folders before recursing
+                if isDirectory && isExcludedFolder(fileURL) {
+                    let reason: String
+                    let folderName = fileURL.lastPathComponent
+                    if FileScanner.defaultExcludedFolders.contains(folderName) {
+                        reason = "Excluded: dependency/build folder"
+                    } else {
+                        reason = "User exclusion: \(folderName)"
+                    }
+                    skippedFolders.append(SkippedFolder(url: fileURL, reason: reason))
+                    enumerator.skipDescendants()
+                    continue
+                }
                 
                 let descriptor = FileDescriptor(
                     fileURL: fileURL,
@@ -176,7 +235,7 @@ public actor FileScanner {
                     fileSize: resourceValues.fileSize.map { Int64($0) },
                     createdAt: resourceValues.creationDate,
                     modifiedAt: resourceValues.contentModificationDate,
-                    isDirectory: resourceValues.isDirectory ?? false,
+                    isDirectory: isDirectory,
                     isSymlink: resourceValues.isSymbolicLink ?? false,
                     permissionsReadable: resourceValues.isReadable ?? false
                 )
@@ -196,6 +255,6 @@ public actor FileScanner {
             }
         }
         
-        return ScanResult(files: files, errors: errorCollector.errors, wasCancelled: false, scannedFileCount: fileCount)
+        return ScanResult(files: files, errors: errorCollector.errors, wasCancelled: false, scannedFileCount: fileCount, skippedFolders: skippedFolders)
     }
 }

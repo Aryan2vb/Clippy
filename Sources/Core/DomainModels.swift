@@ -24,6 +24,12 @@ public struct Rule: Identifiable, Sendable, Codable {
         self.group = group
         self.tags = tags
     }
+    
+    /// Returns a new Rule with the given enabled state
+    public func withEnabled(_ enabled: Bool) -> Rule {
+        Rule(id: id, name: name, description: description, conditions: conditions,
+             outcome: outcome, isEnabled: enabled, group: group, tags: tags)
+    }
 }
 
 // MARK: - Rule Validation
@@ -44,16 +50,16 @@ public struct RuleValidationResult {
 /// Validates rules for security and correctness
 public struct RuleValidator {
     /// Blocked system paths that should never be accessed
-    private static let blockedPaths = [
+    private static let blockedPaths: [String] = [
         "/System", "/usr/bin", "/usr/sbin", "/bin", "/sbin",
-        "/etc", "/var", "/private", "/dev", "/Applications",
-        NSHomeDirectory() + "/Library"
-    ]
+        "/etc", "/var", "/private", "/private/var", "/private/etc",
+        "/dev", "/Applications",
+        (NSHomeDirectory() + "/Library" as NSString).standardizingPath
+    ].map { ($0 as NSString).standardizingPath }
     
     /// Allowed path prefixes for user data
     private static let allowedPrefixes = [
         NSHomeDirectory(),
-        "/Users/",
         "/tmp/"
     ]
     
@@ -102,7 +108,7 @@ public struct RuleValidator {
         // Validate outcome paths
         switch rule.outcome {
         case .move(let url), .copy(let url):
-            let path = url.path
+            let path = sanitizePath(url.path)
             let resolvedPath = (path as NSString).standardizingPath
             
             // Check for blocked paths
@@ -133,28 +139,16 @@ public struct RuleValidator {
     
     /// Sanitizes a path string to prevent traversal attacks
     public static func sanitizePath(_ path: String) -> String {
-        var sanitized = path
-        
+        var result = path.trimmingCharacters(in: .whitespaces)
         // Remove null bytes
-        sanitized = sanitized.replacingOccurrences(of: "\0", with: "")
-        
-        // Normalize path traversal
-        while sanitized.contains("../") {
-            sanitized = sanitized.replacingOccurrences(of: "../", with: "")
+        result = result.replacingOccurrences(of: "\0", with: "")
+        // Expand ~ if present
+        if result.hasPrefix("~") {
+            result = (result as NSString).expandingTildeInPath
         }
-        while sanitized.contains("/..") {
-            sanitized = sanitized.replacingOccurrences(of: "/..", with: "")
-        }
-        
-        // Remove double slashes
-        while sanitized.contains("//") {
-            sanitized = sanitized.replacingOccurrences(of: "//", with: "/")
-        }
-        
-        // Standardize path
-        sanitized = (sanitized as NSString).standardizingPath
-        
-        return sanitized
+        // Use standardizingPath to safely resolve ../ and normalize
+        result = (result as NSString).standardizingPath
+        return result
     }
 }
 
@@ -163,6 +157,8 @@ public struct RuleValidator {
 public enum RuleCondition: Sendable, Codable {
     case fileExtension(is: String)
     case fileName(contains: String)
+    case fileNameExact(is: String)
+    case fileNamePrefix(startsWith: String)
     case fileSize(largerThan: Int64)
     case createdBefore(date: Date)
     case modifiedBefore(date: Date)
@@ -190,12 +186,14 @@ public struct PlannedAction: Identifiable, Sendable {
     public let targetFile: FileDescriptor
     public let actionType: ActionType
     public let reason: String // Human-readable explanation (e.g., "Matched rule 'Archive PDFs'")
+    public let isConflict: Bool
     
-    public init(targetFile: FileDescriptor, actionType: ActionType, reason: String) {
+    public init(targetFile: FileDescriptor, actionType: ActionType, reason: String, isConflict: Bool = false) {
         self.id = UUID()
         self.targetFile = targetFile
         self.actionType = actionType
         self.reason = reason
+        self.isConflict = isConflict
     }
 }
 
@@ -236,7 +234,7 @@ public struct ActionPlan: Sendable {
         var lines = ["I've analyzed your files and found \(totalActions) total items."]
         
         if moveCount > 0 { lines.append("• \(moveCount) will be moved to new locations.") }
-        if deleteCount > 0 { lines.append("• \(deleteCount) will be permanently deleted.") }
+        if deleteCount > 0 { lines.append("• \(deleteCount) will be moved to Trash.") }
         if skipCount > 0 { lines.append("• \(skipCount) will be skipped (no action needed or conflict detected).") }
         
         lines.append("\nNothing will happen to your files until you click 'Confirm'.")
@@ -244,37 +242,62 @@ public struct ActionPlan: Sendable {
     }
 }
 
-// MARK: - Example Usage (Commented)
-public func exampleUsage() {
-    // 1. Evidence (from Scanner)
-    let file = FileDescriptor(
-        fileURL: URL(fileURLWithPath: "/Users/aryansoni/Downloads/8343073283.pdf"),
-        fileName: "8343073283.pdf",
-        fileExtension: "pdf",
-        fileSize: 1024,
-        createdAt: Date(),
-        modifiedAt: Date(),
-        isDirectory: false,
-        isSymlink: false,
-        permissionsReadable: true
-    )
+// MARK: - LLM Suggestion Models
+
+public struct FolderTreeSummary: Codable, Sendable {
+    public let rootPath: String
+    public let totalFiles: Int
+    public let totalSizeBytes: Int64
+    public let topLevelItems: [FolderTreeItem]
     
-    // 2. Rule (Policy)
-    let archivePDFsRule = Rule(
-        name: "Archive PDFs",
-        description: "Move all PDF files to the Archive folder",
-        conditions: [.fileExtension(is: "pdf")],
-        outcome: .move(to: URL(fileURLWithPath: "/Users/me/Documents/Archive"))
-    )
+    public init(rootPath: String, totalFiles: Int, totalSizeBytes: Int64, topLevelItems: [FolderTreeItem]) {
+        self.rootPath = rootPath
+        self.totalFiles = totalFiles
+        self.totalSizeBytes = totalSizeBytes
+        self.topLevelItems = topLevelItems
+    }
+}
+
+public struct FolderTreeItem: Codable, Sendable {
+    public let name: String
+    public let isDirectory: Bool
+    public let sizeBytes: Int64
+    public let fileCount: Int
+    public let `extension`: String?
+    public let modifiedDaysAgo: Int
     
-    // 3. Planning (Logic - would happen in a Planner engine)
-    // Hypothetical match logic:
-    let planAction = PlannedAction(
-        targetFile: file,
-        actionType: .move(destination: URL(fileURLWithPath: "/Users/me/Documents/Archive")),
-        reason: "Matched rule: \(archivePDFsRule.name)"
-    )
+    public init(name: String, isDirectory: Bool, sizeBytes: Int64, fileCount: Int, extension: String? = nil, modifiedDaysAgo: Int) {
+        self.name = name
+        self.isDirectory = isDirectory
+        self.sizeBytes = sizeBytes
+        self.fileCount = fileCount
+        self.extension = `extension`
+        self.modifiedDaysAgo = modifiedDaysAgo
+    }
+}
+
+public struct LLMSuggestion: Identifiable, Codable, Sendable {
+    public let id: UUID
+    public let type: SuggestionType
+    public let description: String
+    public let affectedPaths: [String]
+    public let suggestedAction: String
+    public let confidence: Double
     
-    let plan = ActionPlan(actions: [planAction])
-    print(plan.summary)
+    public init(id: UUID = UUID(), type: SuggestionType, description: String, affectedPaths: [String], suggestedAction: String, confidence: Double) {
+        self.id = id
+        self.type = type
+        self.description = description
+        self.affectedPaths = affectedPaths
+        self.suggestedAction = suggestedAction
+        self.confidence = confidence
+    }
+}
+
+public enum SuggestionType: String, Codable, Sendable {
+    case groupOrphanFiles
+    case potentialVersions
+    case oldUnusedFiles
+    case misplacedFiles
+    case largeFilesReview
 }

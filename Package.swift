@@ -26,6 +26,11 @@ let package = Package(
                 "Core",
                 "Engine"
             ]
+        ),
+        .testTarget(
+            name: "ClippyTests",
+            dependencies: ["ClippyCore", "ClippyEngine", "Clippy"],
+            path: "Tests/ClippyTests"
         )
     ]
 )

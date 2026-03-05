@@ -62,7 +62,7 @@ public enum HistoryActionType: String, Codable, Sendable {
         switch self {
         case .moved: return "blue"
         case .copied: return "green"
-        case .deleted: return "orange"
+        case .deleted: return "red"
         case .renamed: return "purple"
         case .skipped: return "gray"
         }
@@ -245,18 +245,23 @@ public final class HistoryManager: ObservableObject {
         // Mark session as undone by updating it
         if let index = sessions.firstIndex(where: { $0.id == session.id }) {
             var updatedSession = sessions[index]
-            // Update items to reflect they've been undone
+            // Update items to reflect they've been undone with actual results
             updatedSession.items = updatedSession.items.map { item in
-                HistoryItem(
+                // Find the result for this item from details
+                let itemResult = details.first { $0.fileName == item.fileName }
+                let message = itemResult?.message ?? "Undone"
+                let outcome: HistoryOutcome = (itemResult?.outcome == .failed) ? .failed : .skipped
+                
+                return HistoryItem(
                     id: item.id,
                     timestamp: item.timestamp,
                     actionType: item.actionType,
                     fileName: item.fileName,
                     originalPath: item.originalPath,
                     currentPath: item.originalPath, // Now back at original
-                    outcome: .skipped, // Mark as undone
+                    outcome: outcome,
                     ruleName: item.ruleName,
-                    message: "Undone - restored to original location"
+                    message: message
                 )
             }
             sessions[index] = updatedSession
@@ -435,17 +440,17 @@ public final class HistoryManager: ObservableObject {
         if result.outcome == .restored || result.outcome == .skipped {
             if let sessionIndex = sessions.firstIndex(where: { $0.id == session.id }) {
                 if let itemIndex = sessions[sessionIndex].items.firstIndex(where: { $0.id == item.id }) {
-                    var updatedItem = sessions[sessionIndex].items[itemIndex]
+                    let existingItem = sessions[sessionIndex].items[itemIndex]
                     // Mark as undone
                     sessions[sessionIndex].items[itemIndex] = HistoryItem(
-                        id: updatedItem.id,
-                        timestamp: updatedItem.timestamp,
-                        actionType: updatedItem.actionType,
-                        fileName: updatedItem.fileName,
-                        originalPath: updatedItem.originalPath,
-                        currentPath: updatedItem.originalPath, // Now back at original
+                        id: existingItem.id,
+                        timestamp: existingItem.timestamp,
+                        actionType: existingItem.actionType,
+                        fileName: existingItem.fileName,
+                        originalPath: existingItem.originalPath,
+                        currentPath: existingItem.originalPath, // Now back at original
                         outcome: .skipped,
-                        ruleName: updatedItem.ruleName,
+                        ruleName: existingItem.ruleName,
                         message: result.message
                     )
                     saveHistory()
@@ -488,25 +493,12 @@ public final class HistoryManager: ObservableObject {
         }
     }
     
-    private var historyFileURL: URL {
-        get {
-            let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-            let appFolder = appSupport.appendingPathComponent("FileScannerApp", isDirectory: true)
-            
-            // Create directory if needed
-            if !fileManager.fileExists(atPath: appFolder.path) {
-                do {
-                    try fileManager.createDirectory(at: appFolder, withIntermediateDirectories: true)
-                } catch {
-                    DispatchQueue.main.async {
-                        self.lastError = .directoryCreationFailed(error)
-                    }
-                }
-            }
-            
-            return appFolder.appendingPathComponent(historyFileName)
-        }
-    }
+    private lazy var historyFileURL: URL = {
+        let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let appFolder = appSupport.appendingPathComponent("Clippy", isDirectory: true)
+        try? fileManager.createDirectory(at: appFolder, withIntermediateDirectories: true)
+        return appFolder.appendingPathComponent(historyFileName)
+    }()
     
     // MARK: - Error Handling
     

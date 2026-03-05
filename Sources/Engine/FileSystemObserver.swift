@@ -233,8 +233,12 @@ private func fsEventCallback(
     let observer = Unmanaged<FileSystemObserver>.fromOpaque(info).takeUnretainedValue()
     
     // Extract paths (depends on kFSEventStreamCreateFlagUseCFTypes)
-    let paths = Unmanaged<CFArray>.fromOpaque(eventPaths).takeUnretainedValue() as! [String]
-    
+    guard let paths = Unmanaged<CFArray>.fromOpaque(eventPaths)
+        .takeUnretainedValue() as? [String] else {
+        observer.delegate?.observer(observer, didEncounterError: .unknown("Failed to parse FSEvent paths"))
+        return
+    }
+
     // Extract flags and IDs into arrays
     let flags = Array(UnsafeBufferPointer(start: eventFlags, count: numEvents))
     let ids = Array(UnsafeBufferPointer(start: eventIds, count: numEvents))
@@ -242,6 +246,7 @@ private func fsEventCallback(
     observer.handleRawEvents(paths: paths, flags: flags, ids: ids)
 }
 
+#if DEBUG
 // MARK: - Example Usage
 
 public func observerExample() {
@@ -279,3 +284,4 @@ public func observerExample() {
     
     print("Done.")
 }
+#endif

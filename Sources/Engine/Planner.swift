@@ -61,6 +61,14 @@ public struct Planner: Sendable {
                 if !file.fileName.localizedCaseInsensitiveContains(substring) {
                     return false
                 }
+            case .fileNameExact(let exactName):
+                if file.fileName.localizedCaseInsensitiveCompare(exactName) != .orderedSame {
+                    return false
+                }
+            case .fileNamePrefix(let prefix):
+                if !file.fileName.lowercased().hasPrefix(prefix.lowercased()) {
+                    return false
+                }
             case .fileSize(let limit):
                 guard let size = file.fileSize else { return false } // Missing metadata = fail condition
                 if size <= limit {
@@ -122,7 +130,8 @@ public struct Planner: Sendable {
             return PlannedAction(
                 targetFile: file,
                 actionType: .skip,
-                reason: "Conflict! Multiple rules matched with different outcomes: [\(details)]"
+                reason: "Conflict! Multiple rules matched with different outcomes: [\(details)]",
+                isConflict: true
             )
         }
     }
@@ -147,7 +156,11 @@ public struct Planner: Sendable {
             // Pure logic: calculate the new name here.
             var name = file.fileName
             if let p = prefix { name = p + name }
-            if let s = suffix { name = name + s }
+            if let s = suffix {
+                let ext = (name as NSString).pathExtension
+                let base = (name as NSString).deletingPathExtension
+                name = base + s + (ext.isEmpty ? "" : "." + ext)
+            }
             type = .rename(newName: name)
         case .skip(let r):
             // If the rule explicitly says Skip, we combine the reasons.
@@ -180,50 +193,4 @@ public struct Planner: Sendable {
     }
 }
 
-// MARK: - Example Usage (Commented)
-public func plannerExample() {
-    // 1. Setup Evidence
-    let receipt = FileDescriptor(
-        fileURL: URL(fileURLWithPath: "/Users/aryansoni/Downloads/8343073283.pdf"),
-        fileName: "8343073283.pdf",
-        fileExtension: "pdf",
-        fileSize: 500,
-        createdAt: Date(),
-        modifiedAt: Date(),
-        isDirectory: false,
-        isSymlink: false,
-        permissionsReadable: true
-    )
-    
-    // 2. Setup Rules
-    // Rule A: Archive PDFs
-    let archiveDest = URL(fileURLWithPath: "/archive")
-    let ruleA = Rule(
-        name: "Archive PDFs",
-        description: "Moving PDFs",
-        conditions: [.fileExtension(is: "pdf")],
-        outcome: .move(to: archiveDest)
-    )
-    
-    // Rule C: Conflicting rule
-    // let ruleC = Rule(
-    //     name: "Conflicting Move",
-    //     description: "Move all files to trash",
-    //     conditions: [.fileExtension(is: "pdf")],
-    //     outcome: .delete
-    // )
 
-    // 3. Run Planner
-    let planner = Planner()
-    
-    // Test 1: Single Match
-    let plan1 = planner.plan(files: [receipt], rules: [ruleA])
-    print("Plan 1 Outcome: \(plan1.actions[0].reason)") 
-    print("User-Friendly Summary:\n\(plan1.userFriendlySummary)")
-    // Output: "Matched rule: 'Archive PDFs'"
-
-    // Test 2: Conflict
-    let plan2 = planner.plan(files: [receipt], rules: [ruleA])
-    print("Plan 2 Outcome: \(plan2.actions[0].reason)")
-    // Output: "Conflict! Multiple rules matched with different outcomes: [Archive PDFs -> Move to archive; Conflicting Move -> Delete]"
-}

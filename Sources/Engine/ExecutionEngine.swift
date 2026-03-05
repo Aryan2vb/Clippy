@@ -89,17 +89,22 @@ public final class ExecutionEngine: @unchecked Sendable {
     
     /// Validates that a path is within the allowed sandbox boundaries
     private func isPathWithinSandbox(_ path: String) -> Bool {
-        let resolvedPath = (path as NSString).standardizingPath
+        let resolved = (path as NSString).standardizingPath
         
         // Check against blocked system paths
         for blocked in blockedSystemPaths {
-            if resolvedPath.hasPrefix(blocked) {
+            if resolved.hasPrefix(blocked) {
                 return false
             }
         }
         
-        // Check if within allowed sandbox
-        return allowedSandboxPaths.contains { resolvedPath.hasPrefix($0) }
+        // Check if within allowed sandbox (with boundary check)
+        return allowedSandboxPaths.contains { allowed in
+            let standardized = (allowed as NSString).standardizingPath
+            guard resolved.hasPrefix(standardized) else { return false }
+            let remainder = resolved.dropFirst(standardized.count)
+            return remainder.isEmpty || remainder.first == "/"
+        }
     }
     
     /// Executes the given plan step-by-step.
@@ -405,6 +410,7 @@ public final class ExecutionEngine: @unchecked Sendable {
     }
 }
 
+#if DEBUG
 // MARK: - Example Usage
 
 public func executionExample() {
@@ -507,3 +513,4 @@ public func executionExample() {
     try? FileManager.default.removeItem(at: existingFile)
     try? FileManager.default.removeItem(at: destDir)
 }
+#endif
