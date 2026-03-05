@@ -10,13 +10,30 @@ class SuggestionsState: ObservableObject {
     @Published var isChecking = true
     @Published var isAnalyzing = false
     @Published var suggestions: [LLMSuggestion] = []
+    @Published var selectedSuggestions: Set<UUID> = []
     @Published var errorMessage: String?
     
     let engine = LLMEngine()
     
+    func toggleSelection(for suggestion: LLMSuggestion) {
+        if selectedSuggestions.contains(suggestion.id) {
+            selectedSuggestions.remove(suggestion.id)
+        } else {
+            selectedSuggestions.insert(suggestion.id)
+        }
+    }
+    
+    func selectAll() {
+        selectedSuggestions = Set(suggestions.map { $0.id })
+    }
+    
+    func deselectAll() {
+        selectedSuggestions.removeAll()
+    }
+    
     func checkOllama() {
         Task {
-            let available = await engine.isOllamaAvailable()
+            let available = await engine.isAvailable()
             await MainActor.run {
                 self.isAvailable = available
                 self.isChecking = false
@@ -69,14 +86,17 @@ class SuggestionsState: ObservableObject {
                     
                     // Limit to 200 top items to avoid token overflow
                     if topItems.count < 200 {
-                        topItems.append(FolderTreeItem(
+                        let item = FolderTreeItem(
                             name: itemURL.lastPathComponent,
+                            fullPath: itemURL.path,
                             isDirectory: isDirectory,
                             sizeBytes: size,
                             fileCount: fileCount,
                             extension: isDirectory ? nil : itemURL.pathExtension,
                             modifiedDaysAgo: daysAgo
-                        ))
+                        )
+                        print("SuggestionsView: Adding item - name: \(item.name), fullPath: \(item.fullPath), isDirectory: \(item.isDirectory)")
+                        topItems.append(item)
                     }
                 }
             } catch {
@@ -117,6 +137,7 @@ class SuggestionsState: ObservableObject {
                 
                 await MainActor.run {
                     self.suggestions = filteredSuggestions
+                    self.selectedSuggestions.removeAll()
                     self.isAnalyzing = false
                 }
             } catch {
@@ -129,25 +150,65 @@ class SuggestionsState: ObservableObject {
     }
     
     func approve(suggestion: LLMSuggestion, appState: AppState) {
-        guard let actionPlan = appState.actionPlan else {
-            // Need a plan to append to
-            var actions: [PlannedAction] = []
-            let plan = ActionPlan(actions: actions) // Need to resolve target files here
-            // Note: The prompt requires files, we only have paths.
-            // Converting paths to FileDescriptors requires hitting the disk.
+        convertSuggestionToActionPlan(suggestion: suggestion, appState: appState)
+    }
+    
+    func approveAll(appState: AppState) {
+        // Approve all suggestions one by one
+        let suggestionsToApprove = self.suggestions
+        for suggestion in suggestionsToApprove {
             self.convertSuggestionToActionPlan(suggestion: suggestion, appState: appState)
-            return
         }
-        
-        self.convertSuggestionToActionPlan(suggestion: suggestion, appState: appState)
+        // Clear all suggestions after approving
+        self.suggestions.removeAll()
+        self.selectedSuggestions.removeAll()
+    }
+    
+    func approveSelected(appState: AppState) {
+        // Only approve selected suggestions
+        let suggestionsToApprove = self.suggestions.filter { selectedSuggestions.contains($0.id) }
+        for suggestion in suggestionsToApprove {
+            self.convertSuggestionToActionPlan(suggestion: suggestion, appState: appState)
+        }
+        // Remove approved suggestions from list
+        self.suggestions.removeAll { selectedSuggestions.contains($0.id) }
+        self.selectedSuggestions.removeAll()
     }
     
     private func convertSuggestionToActionPlan(suggestion: LLMSuggestion, appState: AppState) {
          Task.detached {
             var newActions: [PlannedAction] = []
-            // Simplistic map: path string to Action
+            
+            guard let root = await appState.selectedFolderURL else {
+                print("SuggestionsView: No selected folder, cannot create action plan")
+                return
+            }
+            
+            let destFolderName = determineDestinationFolder(suggestion: suggestion, rootURL: root)
+            let destFolderURL = root.appendingPathComponent(destFolderName)
+            
+            // Build actions first - validate files
+            print("SuggestionsView: Processing \(suggestion.affectedPaths.count) affectedPaths")
             for path in suggestion.affectedPaths {
+                print("SuggestionsView: Checking path: \(path)")
                 let url = URL(fileURLWithPath: path)
+                
+                // Check if file exists
+                var isDirectory: ObjCBool = false
+                let fileExists = FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory)
+                print("SuggestionsView: fileExists = \(fileExists), isDirectory = \(isDirectory.boolValue)")
+                
+                if !fileExists {
+                    print("SuggestionsView: File does not exist at \(path)")
+                    continue
+                }
+                
+                if isDirectory.boolValue {
+                    print("SuggestionsView: Skipping directory \(path)")
+                    continue
+                }
+                
+                print("SuggestionsView: Processing file at \(path)")
                 
                 // Construct a FileDescriptor
                 let attrs = try? FileManager.default.attributesOfItem(atPath: path)
@@ -158,30 +219,12 @@ class SuggestionsState: ObservableObject {
                     fileSize: (attrs?[.size] as? Int64) ?? 0,
                     createdAt: (attrs?[.creationDate] as? Date) ?? Date(),
                     modifiedAt: (attrs?[.modificationDate] as? Date) ?? Date(),
-                    isDirectory: (attrs?[.type] as? FileAttributeType) == .typeDirectory,
+                    isDirectory: false,
                     isSymlink: false,
                     permissionsReadable: true
                 )
                 
-                // Parse "suggestedAction": either move or skip based on text
-                // Since LLM returns text like "Move to Archive/", we resolve the root path
-                var actionType: ActionType = .skip
-                let actionStr = suggestion.suggestedAction.lowercased()
-                
-                if actionStr.contains("move to") || actionStr.contains("group") {
-                    // Very rudimentary parsing to generate a destination
-                    let words = suggestion.suggestedAction.split(separator: " ").map(String.init)
-                    // Pick the last word if it looks like a path, else fallback
-                    let destFolder = words.last?.replacingOccurrences(of: "'", with: "").replacingOccurrences(of: "\"", with: "") ?? "AI_Grouped"
-                    
-                    // Put it in the selected Folder root
-                    if let root = await appState.selectedFolderURL {
-                        let destURL = root.appendingPathComponent(destFolder).appendingPathComponent(url.lastPathComponent)
-                        actionType = .move(destination: destURL)
-                    }
-                } else if actionStr.contains("delete") || actionStr.contains("trash") || actionStr.contains("remove") {
-                     actionType = .delete
-                }
+                let actionType: ActionType = .move(destination: destFolderURL.appendingPathComponent(url.lastPathComponent))
                 
                 let action = PlannedAction(
                     targetFile: fd,
@@ -189,6 +232,27 @@ class SuggestionsState: ObservableObject {
                     reason: "AI: \(suggestion.description)"
                 )
                 newActions.append(action)
+            }
+            
+            // Only create folder if there are valid files to move
+            guard !newActions.isEmpty else {
+                await MainActor.run {
+                    self.errorMessage = "No valid files found for '\(suggestion.description)'. Files may have been moved or deleted."
+                    self.suggestions.removeAll { $0.id == suggestion.id }
+                }
+                return
+            }
+            
+            // NOW create the folder
+            do {
+                try FileManager.default.createDirectory(at: destFolderURL, withIntermediateDirectories: true)
+            } catch {
+                print("SuggestionsView: Failed to create folder \(destFolderURL.path): \(error)")
+                await MainActor.run {
+                    self.errorMessage = "Could not create folder '\(destFolderName)': \(error.localizedDescription)"
+                    self.isAnalyzing = false
+                }
+                return
             }
             
             let finalActions = newActions
@@ -208,9 +272,6 @@ class SuggestionsState: ObservableObject {
                 
                 // Remove from suggestions array
                 self.suggestions.removeAll { $0.id == suggestion.id }
-                
-                // Switch tab so user sees the newly populated Plan
-                appState.selectedTab = .organize
             }
         }
     }
@@ -371,41 +432,140 @@ struct SuggestionsView: View {
         List {
             // Settings row
             Section {
-                HStack {
-                    Text("Ollama Model")
-                    Spacer()
-                    TextField("Model name", text: Binding(
-                        get: { state.engine.selectedModel },
-                        set: { state.engine.selectedModel = $0 }
-                    ))
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 150)
-                }
+                providerPicker
+                modelSelector
             }
             
-            Section(header: Text("Suggestions").font(.headline).foregroundColor(.secondary)) {
+            Section(header: HStack {
+                Text("Suggestions").font(.headline).foregroundColor(.secondary)
+                Spacer()
+                if !state.suggestions.isEmpty {
+                    Menu {
+                        Button("Select All") {
+                            state.selectAll()
+                        }
+                        Button("Deselect All") {
+                            state.deselectAll()
+                        }
+                        Divider()
+                        Button("Approve Selected (\(state.selectedSuggestions.count))") {
+                            state.approveSelected(appState: appState)
+                        }
+                        .disabled(state.selectedSuggestions.isEmpty)
+                        Button("Approve All") {
+                            state.approveAll(appState: appState)
+                        }
+                    } label: {
+                        Label("Actions", systemImage: "ellipsis.circle")
+                    }
+                    .controlSize(.small)
+                }
+            }) {
                 ForEach(state.suggestions) { suggestion in
-                    SuggestionCard(suggestion: suggestion, onApprove: {
-                        state.approve(suggestion: suggestion, appState: appState)
-                    }, onDismiss: {
-                        state.dismiss(suggestion: suggestion)
-                    })
+                    SuggestionCard(
+                        suggestion: suggestion,
+                        isSelected: state.selectedSuggestions.contains(suggestion.id),
+                        onToggleSelection: { state.toggleSelection(for: suggestion) },
+                        onApprove: {
+                            state.approve(suggestion: suggestion, appState: appState)
+                        }, onDismiss: {
+                            state.dismiss(suggestion: suggestion)
+                        })
                 }
             }
         }
         .listStyle(.inset)
+    }
+    
+    // MARK: - Computed Properties
+    
+    private var providerPicker: some View {
+        Picker("Provider", selection: Binding(
+            get: { state.engine.selectedProvider },
+            set: { newProvider in
+                state.engine.selectedProvider = newProvider
+                // Auto-switch to appropriate default model
+                switch newProvider {
+                case .ollama:
+                    state.engine.selectedModel = "llama3.2:3b"
+                case .groq:
+                    state.engine.selectedModel = "openai/gpt-oss-120b"
+                }
+                state.checkOllama()
+            }
+        )) {
+            ForEach(LLMProvider.allCases, id: \.self) { provider in
+                Text(provider.displayName).tag(provider)
+            }
+        }
+    }
+    
+    @ViewBuilder
+    private var modelSelector: some View {
+        if state.engine.selectedProvider == .ollama {
+            HStack {
+                Text("Model")
+                Spacer()
+                TextField("Model name", text: Binding(
+                    get: { state.engine.selectedModel },
+                    set: { state.engine.selectedModel = $0 }
+                ))
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 150)
+            }
+        } else if state.engine.selectedProvider == .groq {
+            HStack {
+                Text("Model")
+                Spacer()
+                Picker("Model", selection: Binding(
+                    get: { state.engine.selectedModel },
+                    set: { state.engine.selectedModel = $0 }
+                )) {
+                    ForEach(state.engine.getGroqModels(), id: \.self) { model in
+                        Text(model).tag(model)
+                    }
+                }
+                .pickerStyle(.menu)
+                .frame(width: 200)
+            }
+            
+            HStack {
+                Text("API Key")
+                Spacer()
+                SecureField("Groq API Key", text: Binding(
+                    get: { state.engine.groqAPIKey },
+                    set: { state.engine.groqAPIKey = $0 }
+                ))
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 180)
+            }
+            
+            Button("Check Availability") {
+                state.checkOllama()
+            }
+            .controlSize(.small)
+        }
     }
 }
 
 // MARK: - Suggestion Card
 struct SuggestionCard: View {
     let suggestion: LLMSuggestion
+    let isSelected: Bool
+    let onToggleSelection: () -> Void
     let onApprove: () -> Void
     let onDismiss: () -> Void
     
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top) {
+                Button(action: onToggleSelection) {
+                    Image(systemName: isSelected ? "checkmark.square.fill" : "square")
+                        .foregroundColor(isSelected ? .accentColor : .secondary)
+                        .font(.title3)
+                }
+                .buttonStyle(.plain)
+                
                 Image(systemName: "sparkles")
                     .foregroundColor(.accentColor)
                     .font(.headline)
@@ -478,4 +638,110 @@ struct SuggestionCard: View {
         if suggestion.confidence > 0.5 { return .orange }
         return .red
     }
+}
+
+// MARK: - Helper Functions
+
+func determineDestinationFolder(suggestion: LLMSuggestion, rootURL: URL) -> String {
+    let actionStr = suggestion.suggestedAction.lowercased()
+    let type = suggestion.type
+    
+    // First try to extract folder name from suggestedAction text using regex
+    // Look for quoted strings: 'foldername' or "foldername"
+    if let folderName = extractFolderName(from: actionStr) {
+        return folderName
+    }
+    
+    // Fallback: determine based on suggestion type
+    switch type {
+    case .groupByExtension:
+        // Get most common extension from affectedPaths using frequency count
+        let extensions = suggestion.affectedPaths
+            .map { URL(fileURLWithPath: $0).pathExtension.lowercased() }
+            .filter { !$0.isEmpty }
+        
+        if !extensions.isEmpty {
+            // Find most common extension
+            var counts: [String: Int] = [:]
+            for ext in extensions {
+                counts[ext, default: 0] += 1
+            }
+            if let mostCommon = counts.max(by: { $0.value < $1.value }) {
+                return mostCommon.key
+            }
+        }
+        return "by_extension"
+        
+    case .groupByNamePattern:
+        // Find longest common prefix among filenames
+        let names = suggestion.affectedPaths.map { URL(fileURLWithPath: $0).lastPathComponent }
+        if let commonPrefix = findCommonPrefix(names: names) {
+            let cleaned = commonPrefix
+                .replacingOccurrences(of: "*", with: "")
+                .replacingOccurrences(of: " ", with: "_")
+                .trimmingCharacters(in: CharacterSet(charactersIn: "_"))
+            if !cleaned.isEmpty {
+                return cleaned
+            }
+        }
+        return "grouped"
+        
+    case .groupOrphanFiles:
+        return "orphaned_files"
+        
+    case .potentialVersions:
+        return "versions"
+        
+    case .misplacedFiles:
+        return "misplaced"
+        
+    case .largeFilesReview:
+        return "large_files"
+        
+    @unknown default:
+        return "ai_grouped"
+    }
+}
+
+func extractFolderName(from text: String) -> String? {
+    // Try single quotes first: Create folder 'zip'
+    if let regex = try? NSRegularExpression(pattern: "'([^']+)'", options: []),
+       let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+       let range = Range(match.range(at: 1), in: text) {
+        let folder = String(text[range]).lowercased()
+        return folder.isEmpty ? nil : folder
+    }
+    
+    // Try double quotes: Create folder "zip"
+    if let regex = try? NSRegularExpression(pattern: "\"([^\"]+)\"", options: []),
+       let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+       let range = Range(match.range(at: 1), in: text) {
+        let folder = String(text[range]).lowercased()
+        return folder.isEmpty ? nil : folder
+    }
+    
+    return nil
+}
+
+func findCommonPrefix(names: [String]) -> String? {
+    guard !names.isEmpty else { return nil }
+    
+    let sorted = names.sorted()
+    guard let first = sorted.first, let last = sorted.last else { return nil }
+    
+    var prefix = ""
+    for (c1, c2) in zip(first, last) {
+        if c1 == c2 {
+            prefix.append(c1)
+        } else {
+            break
+        }
+    }
+    
+    // Remove trailing numbers/underscores/spaces
+    while let lastChar = prefix.last, lastChar.isNumber || lastChar == "_" || lastChar == " " {
+        prefix.removeLast()
+    }
+    
+    return prefix.isEmpty ? nil : prefix
 }
